@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from typing import Any
 
@@ -42,6 +43,22 @@ class Inventory:
         self.feed = feed
         self.devices: dict[int, DiscoveredDevice] = {}
         self.state: Tekmar482State | None = None
+        self.dirty = asyncio.Event()
+        self._seen: set[str] = set()
+        self.read_lock = asyncio.Lock()
+
+    def observed_device(self, key: str) -> None:
+        if key not in self._seen:
+            self._seen.add(key)
+            self.dirty.set()
+
+    async def watch(self, client: Tekmar482Client) -> None:
+        # A cold gateway may have no tHA inventory until its first native reports.
+        while True:
+            self.dirty.clear()
+            await self.refresh(client)
+            await self.dirty.wait()
+            await asyncio.sleep(2)
 
     def observe(self, packet: TrpcPacket, command: TrpcCommand | None) -> None:
         if (
@@ -68,11 +85,16 @@ class Inventory:
             )
 
     async def refresh(self, client: Tekmar482Client) -> None:
+        async with self.read_lock:
+            await self._refresh(client)
+
+    async def _refresh(self, client: Tekmar482Client) -> None:
         try:
             self.feed.status["inventory"] = "reading metadata"
             discovery = await client.discover(
                 timeout=60, manage_reporting=False, setback_enable=None
             )
+            previous = self.devices
             self.devices = {d.address: d for d in discovery.devices}
             self.feed.inventory = {
                 d.address: {
@@ -83,6 +105,15 @@ class Inventory:
                     "model": d.model,
                     "family": d.kind.value if d.kind else None,
                     "settings": {},
+                    **(
+                        {
+                            k: v
+                            for k, v in self.feed.inventory.get(d.address, {}).items()
+                            if k in {"settings", "raw_settings", "temperature_f"}
+                        }
+                        if previous.get(d.address) == d
+                        else {}
+                    ),
                     "metadata": data(d),
                     "capabilities": {
                         b.name.lower(): d.attributes.supports(b)

@@ -40,6 +40,7 @@ from tekmar_482.wire_trace import observe_bridge_packets
 from . import operations
 from .devices import Inventory
 from .feed import Feed, Row, data
+from .identity import identify_sources
 from .trace_view import native_quality, native_spans, span, trpc_quality, trpc_spans
 
 
@@ -184,12 +185,21 @@ class Gateway:
         self.client = client
         stack.enter_context(client.session.observe_messages(self.inventory.observe))
         async with asyncio.TaskGroup() as tasks:
-            self.scan = tasks.create_task(self.inventory.refresh(client))
+            identify = (
+                tasks.create_task(
+                    identify_sources(self.feed, manager, self.trace_ports)
+                )
+                if has_trace and flags & BridgeFeature.NORMAL_IDENTITY
+                else None
+            )
+            self.scan = tasks.create_task(self.inventory.watch(client))
             try:
                 await self._capture(stack, self._normal_frames(trace), traced=has_trace)
             finally:
                 self.scan.cancel()
                 self.scan = None
+                if identify is not None:
+                    identify.cancel()
 
     async def _capture(
         self, stack: AsyncExitStack, source: Coroutine[Any, Any, None], *, traced: bool
@@ -269,6 +279,12 @@ class Gateway:
         self, frame: NativeFrame, direction: str, *, observed: bool, **meta: Any
     ) -> None:
         key = self.feed.observe(frame) if observed else None
+        if key and frame.message.name in {
+            "AirGroupMemberStatus",
+            "AirGroupMasterStatus",
+            "SetpointStatus",
+        }:
+            self.inventory.observed_device(key)
         quality, why = native_quality(frame)
         if meta.get("outcome") not in (None, "ack"):
             quality, why = (
@@ -566,7 +582,7 @@ class Gateway:
             if self.feed.status["connection"] != "online":
                 raise RuntimeError("Gateway is not connected")
             if name == "inventory-read" and self.client:
-                if self.scan is not None and not self.scan.done():
+                if self.inventory.read_lock.locked():
                     raise RuntimeError("An inventory read is already running")
                 await self.inventory.refresh(self.client)
                 return {
