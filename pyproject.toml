@@ -1,0 +1,37 @@
+[build-system]
+requires = ["uv_build>=0.9.11"]
+build-backend = "uv_build"
+
+[project]
+name = "tekmar-482-dashboard"
+version = "0.1.0"
+description = "Live tN4 network and gateway instrument console"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "James Hilliard" }]
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.115", "tekmar-482", "uvicorn>=0.32", "websockets>=14"]
+
+[project.optional-dependencies]
+serial = ["tekmar-482[serial]"]
+
+[project.scripts]
+tekmar-482-dashboard = "tekmar_482_dashboard.main:main"
+
+[project.urls]
+Repository = "https://github.com/jameshilliard/tekmar-482-dashboard"
+
+[tool.uv.sources]
+tekmar-482 = { git = "https://github.com/jameshilliard/tekmar-482.git", rev = "ccff48fd5cfbfb357ebe7308105006a5cabd5a52" }
+
+[dependency-groups]
+dev = ["httpx", "ruff", "mypy", "pre-commit"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "ASYNC"]
+ignore = ["ASYNC109"]
+
+[tool.mypy]
+strict = true
+packages = ["tekmar_482_dashboard"]
+mypy_path = "src"

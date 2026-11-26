@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Linewatch | tekmar 482</title>
+    <link rel="icon" href="/static/icons/audio-waveform.svg" />
+    <link rel="stylesheet" href="/static/app.css" />
+    <link rel="stylesheet" href="/static/console.css" />
+    <script type="module" src="/static/app.js"></script>
+  </head>
+  <body data-layout="mixed">
+    <header class="rail">
+      <div class="brand">
+        <span class="brand-icon"><i data-icon="audio-waveform"></i></span>
+        <div><b>Linewatch</b><small>TEKMAR 482</small></div>
+      </div>
+      <nav aria-label="Workspace">
+        <button data-page="monitor" class="selected">
+          <i data-icon="activity"></i>Network monitor
+        </button>
+        <button data-page="diagnostics">
+          <i data-icon="chart-no-axes-combined"></i>Diagnostics
+        </button>
+        <button data-page="operations">
+          <i data-icon="sliders-horizontal"></i>Operations
+        </button>
+      </nav>
+      <div class="rail-end">
+        <div>
+          <i data-icon="circuit-board"></i
+          ><span
+            >tekmarNet Gateway<br /><small id="transport"
+              >482 / waiting</small
+            ></span
+          >
+        </div>
+      </div>
+    </header>
+    <main>
+      <header class="bar">
+        <span class="crumb"
+          ><i data-icon="network"></i>Workspace <span>/</span>
+          <b id="crumb">Network monitor</b></span
+        >
+        <button id="operator" class="plain">
+          <i data-icon="lock-keyhole"></i><span>Observer</span>
+        </button>
+      </header>
+      <div class="content">
+        <div class="heading">
+          <div>
+            <div class="eyebrow"><span class="dash"></span>GATEWAY CONSOLE</div>
+            <h1 id="title">Network monitor</h1>
+          </div>
+          <span id="connection" class="badge">Connecting</span>
+        </div>
+        <div id="problem" role="status" hidden></div>
+        <section id="monitor">
+          <div class="overview">
+            <div>
+              <label>Observed sources</label><strong id="devices-n">0</strong>
+            </div>
+            <div>
+              <label>Received frames</label><strong id="rx-n">0</strong>
+            </div>
+            <div>
+              <label>Transmit attempts</label><strong id="tx-n">0</strong>
+            </div>
+            <div>
+              <label>Gateway mode</label
+              ><strong class="mode" id="gateway-mode">Waiting</strong>
+            </div>
+          </div>
+          <div class="section-head">
+            <h2>Bus activity</h2>
+            <span class="meta">Last 60 seconds</span>
+          </div>
+          <div id="ports" class="ports" aria-label="Physical bus filters"></div>
+          <div class="tools">
+            <div class="segments" aria-label="Display mode">
+              <button data-view="mixed" aria-pressed="true">
+                <i data-icon="layers"></i>Mixed</button
+              ><button data-view="devices">
+                <i data-icon="cpu"></i>Devices</button
+              ><button data-view="trace">
+                <i data-icon="terminal"></i>Trace
+              </button>
+            </div>
+            <div class="right">
+              <label class="search"
+                ><i data-icon="search"></i
+                ><input
+                  id="search"
+                  type="search"
+                  placeholder="Filter traffic"
+                  aria-label="Filter devices and traffic"
+              /></label>
+              <button
+                class="icon"
+                id="pause"
+                title="Pause display"
+                aria-label="Pause display"
+              >
+                <i data-icon="pause"></i>
+              </button>
+              <button
+                class="icon"
+                id="export"
+                title="Export filtered trace"
+                aria-label="Export filtered trace"
+              >
+                <i data-icon="download"></i>
+              </button>
+            </div>
+          </div>
+          <div class="panes" id="panes" data-view="mixed">
+            <section class="trace-pane">
+              <div class="section-head">
+                <h2><span class="live-dot"></span>Live trace</h2>
+                <button type="button" id="follow" disabled>
+                  Following live
+                </button>
+                <select id="layer" aria-label="Protocol layer">
+                  <option value="">All layers</option>
+                  <option value="tn4">tN4</option>
+                  <option value="trpc">tRPC</option>
+                  <option value="error">Errors</option>
+                  <option value="system">System</option>
+                </select>
+              </div>
+              <div class="trace-key">
+                <span class="good">✓ Decoded</span
+                ><span class="partial">? Partial</span
+                ><span class="error">× Error</span>
+              </div>
+              <div id="flow" class="flow" aria-label="Live message path"></div>
+              <div
+                id="live-bytes"
+                class="live-bytes"
+                aria-label="Latest frame with decoded bytes"
+              ></div>
+              <div
+                class="table-scroll trace-scroll"
+                tabindex="0"
+                role="region"
+                aria-label="Packet history"
+              >
+                <table class="trace-table">
+                  <thead>
+                    <tr>
+                      <th>Time / path</th>
+                      <th>Bus</th>
+                      <th>Message / decoded bytes</th>
+                    </tr>
+                  </thead>
+                  <tbody id="events"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="devices-pane">
+              <div class="section-head">
+                <h2>Connected devices</h2>
+                <button
+                  id="refresh-devices"
+                  class="icon"
+                  title="Read inventory and configuration"
+                  aria-label="Read inventory and configuration"
+                >
+                  <i data-icon="radio-tower"></i>
+                </button>
+              </div>
+              <div id="device-cards" class="device-cards"></div>
+              <div class="section-head">
+                <h2>Bus sources</h2>
+                <span class="meta" id="peer-count"></span>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Source</th>
+                      <th>Bus</th>
+                      <th>Air temp.</th>
+                      <th>Frames</th>
+                    </tr>
+                  </thead>
+                  <tbody id="peers"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </section>
+        <section id="diagnostics" hidden>
+          <div class="section-head"><h2>Gateway status</h2></div>
+          <dl class="facts" id="facts"></dl>
+          <form id="monitor-config" class="work-form">
+            <h2>Capture configuration</h2>
+            <div class="formrow">
+              <label
+                >Bridge mode<select name="mode">
+                  <option value="normal">Normal</option>
+                  <option value="raw">Raw (passive RX)</option>
+                </select></label
+              >
+              <label class="check"
+                ><input type="checkbox" name="errors" /> Push error
+                counters</label
+              >
+            </div>
+            <div id="masks"></div>
+            <div class="commands">
+              <button>Set capture</button
+              ><button type="button" id="trace-state">Read trace drops</button>
+            </div>
+          </form>
+          <div class="section-head">
+            <h2>Error counters</h2>
+            <span class="meta">Gateway lifetime totals</span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Reason</th>
+                  <th>Count</th>
+                  <th>Last seen (ms)</th>
+                </tr>
+              </thead>
+              <tbody id="errors"></tbody>
+            </table>
+          </div>
+          <form id="read-error" class="work-form">
+            <h2>Read a counter</h2>
+            <div class="formrow">
+              <label>Source<select name="source"></select></label
+              ><label>Reason<select name="reason"></select></label
+              ><button>Read counter</button>
+            </div>
+          </form>
+        </section>
+        <section id="operations" hidden>
+          <div class="op-tabs segments">
+            <button data-operation="climate" aria-pressed="true">
+              Thermostat</button
+            ><button data-operation="trpc">tRPC</button
+            ><button data-operation="raw">Raw Send</button
+            ><button data-operation="catalog">Client tools</button>
+          </div>
+          <form id="climate" class="work-form">
+            <h2>Thermostat controls</h2>
+            <div class="formrow">
+              <label>Bus<select name="port"></select></label
+              ><label>Subnet<input name="subnet" value="0" required /></label
+              ><label>Node<input name="node" value="1" required /></label>
+            </div>
+            <div class="formrow">
+              <label
+                >Parameter<select name="control">
+                  <option value="target">Stored target</option>
+                  <option value="mode">Operating mode</option>
+                </select></label
+              ><label data-target
+                >Target<select name="target">
+                  <option>heat</option>
+                  <option>cool</option>
+                  <option>floor</option>
+                  <option>fan</option>
+                  <option>humidify</option>
+                  <option>dehumidify</option>
+                </select></label
+              ><label data-target
+                >Period<select name="period">
+                  <option>occupied</option>
+                  <option>wake</option>
+                  <option>unoccupied</option>
+                  <option>sleep</option>
+                  <option>away</option>
+                </select></label
+              ><label data-target
+                ><span id="unit">Value (°C)</span
+                ><input name="value" type="number" step="any" /></label
+              ><label id="climate-mode" hidden
+                >Mode<select name="mode">
+                  <option>heat</option>
+                  <option>cool</option>
+                  <option>auto</option>
+                  <option>off</option>
+                  <option>vent</option>
+                  <option>emergency</option>
+                </select></label
+              >
+            </div>
+            <div class="commands">
+              <button value="preview">Preview</button
+              ><button value="apply" class="primary">Apply change</button>
+            </div>
+          </form>
+          <form id="trpc" class="work-form" hidden>
+            <h2>tRPC transaction</h2>
+            <div class="formrow">
+              <label
+                >Service<select name="service">
+                  <option value="request">Request</option>
+                  <option value="update">Update</option>
+                </select></label
+              ><label>Method<select name="method"></select></label>
+            </div>
+            <label
+              >Fields (JSON)<textarea name="fields" spellcheck="false">
+{}</textarea></label
+            ><button>Send transaction</button>
+          </form>
+          <form id="raw" class="work-form" hidden>
+            <h2>Raw tN4 transmission</h2>
+            <div class="formrow">
+              <label>Bus<select name="port"></select></label
+              ><label
+                >Native body (hex)<input
+                  name="hex"
+                  autocomplete="off"
+                  required /></label
+              ><button>Send once</button>
+            </div>
+          </form>
+          <form id="catalog" class="work-form" hidden>
+            <h2>Client operations</h2>
+            <label>Operation<select name="command"></select></label
+            ><label
+              >Arguments (JSON array)<textarea name="args" spellcheck="false">
+[]</textarea>
+            </label>
+            <details>
+              <summary>Command reference</summary>
+              <pre id="help"></pre>
+            </details>
+            <div class="commands">
+              <button value="preview">Run / preview</button
+              ><button value="apply" id="tool-apply" class="primary">
+                Apply change
+              </button>
+            </div>
+          </form>
+        </section>
+        <section id="output" hidden>
+          <div class="section-head">
+            <h2>Operation result</h2>
+            <button
+              class="icon"
+              id="dismiss-output"
+              title="Dismiss result"
+              aria-label="Dismiss result"
+            >
+              <i data-icon="x"></i>
+            </button>
+          </div>
+          <pre id="result" aria-live="polite"></pre>
+        </section>
+      </div>
+      <footer>
+        <span
+          ><span class="live-dot" id="ws-dot"></span
+          ><b id="ws-status">Connecting</b></span
+        ><span id="sequence">Sequence 0</span>
+      </footer>
+    </main>
+    <dialog id="detail">
+      <div class="section-head">
+        <h2 id="detail-title">Details</h2>
+        <button class="icon" data-close aria-label="Close details">
+          <i data-icon="x"></i>
+        </button>
+      </div>
+      <div id="detail-body"></div>
+    </dialog>
+    <dialog id="auth">
+      <div class="section-head">
+        <h2>Operator access</h2>
+        <button class="icon" data-close aria-label="Close">
+          <i data-icon="x"></i>
+        </button>
+      </div>
+      <form id="auth-form">
+        <label
+          >Operator key<input
+            type="password"
+            name="key"
+            required
+            autocomplete="off"
+        /></label>
+        <div class="commands">
+          <button class="primary">Unlock controls</button>
+        </div>
+        <p id="auth-error" role="status"></p>
+      </form>
+    </dialog>
+    <dialog id="confirm">
+      <div class="section-head">
+        <h2>Confirm operation</h2>
+        <button class="icon" data-close aria-label="Cancel">
+          <i data-icon="x"></i>
+        </button>
+      </div>
+      <pre id="review"></pre>
+      <div class="commands">
+        <button data-close>Cancel</button
+        ><button id="execute" class="primary">Confirm and run</button>
+      </div>
+    </dialog>
+  </body>
+</html>
