@@ -50,11 +50,26 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8482)
     parser.add_argument(
+        "--compat-port",
+        type=int,
+        metavar="PORT",
+        help="enable the trusted-LAN stock tRPC TCP listener (usually 3000)",
+    )
+    parser.add_argument(
+        "--compat-host",
+        metavar="ADDRESS",
+        help="compatibility listener bind address (defaults to --host)",
+    )
+    parser.add_argument(
         "--key-file",
         type=Path,
         help="optionally require an operator key for commands (default unlocked)",
     )
     args = parser.parse_args()
+    if args.compat_host and args.compat_port is None:
+        parser.error("--compat-host requires --compat-port")
+    if args.compat_port is not None and not 1 <= args.compat_port <= 65535:
+        parser.error("--compat-port must be between 1 and 65535")
     if args.vendor and (args.errors or args.mode != "normal"):
         parser.error(
             "Stock firmware cannot provide native capture or gateway error reports"
@@ -73,6 +88,8 @@ def main() -> None:
         vendor=args.vendor,
         mode=args.mode,
         errors=args.errors if args.errors is not None else not args.vendor,
+        compat_host=args.compat_host or args.host,
+        compat_port=args.compat_port,
     )
     uvicorn.run(
         create_app(gateway, operator_key(args.key_file) if args.key_file else None),

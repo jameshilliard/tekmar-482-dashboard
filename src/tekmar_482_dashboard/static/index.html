@@ -22,6 +22,9 @@
         <button data-page="diagnostics">
           <i data-icon="chart-no-axes-combined"></i>Diagnostics
         </button>
+        <button data-page="clients" title="Clients">
+          <i data-icon="network"></i>Clients
+        </button>
         <button data-page="operations">
           <i data-icon="sliders-horizontal"></i>Operations
         </button>
@@ -271,6 +274,71 @@
               ><button>Read counter</button>
             </div>
           </form>
+        </section>
+        <section id="clients" hidden>
+          <div class="overview">
+            <div>
+              <label>TCP listener</label
+              ><strong class="mode" id="client-listener">Disabled</strong>
+            </div>
+            <div>
+              <label>Active clients</label><strong id="client-active">0</strong>
+            </div>
+            <div>
+              <label>Total connections</label
+              ><strong id="client-total">0</strong>
+            </div>
+            <div>
+              <label>Gateway frames filtered</label
+              ><strong id="client-withheld">0</strong>
+            </div>
+          </div>
+          <div class="section-head">
+            <h2>Connected clients</h2>
+            <span id="client-binding" class="meta"></span>
+          </div>
+          <div
+            class="table-scroll"
+            tabindex="0"
+            role="region"
+            aria-label="Connected clients"
+          >
+            <table class="client-table">
+              <thead>
+                <tr>
+                  <th>Remote endpoint</th>
+                  <th>Connected</th>
+                  <th>To gateway</th>
+                  <th>To client</th>
+                  <th>Filtered input</th>
+                  <th>Last request</th>
+                  <th>Last reply or report</th>
+                  <th>Last activity</th>
+                </tr>
+              </thead>
+              <tbody id="client-rows"></tbody>
+            </table>
+          </div>
+          <div class="section-head"><h2>Recent disconnects</h2></div>
+          <div
+            class="table-scroll"
+            tabindex="0"
+            role="region"
+            aria-label="Recent disconnects"
+          >
+            <table class="client-table">
+              <thead>
+                <tr>
+                  <th>Remote endpoint</th>
+                  <th>Disconnected</th>
+                  <th>To gateway</th>
+                  <th>To client</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="client-history"></tbody>
+            </table>
+          </div>
         </section>
         <section id="operations" hidden>
           <div class="op-tabs segments">

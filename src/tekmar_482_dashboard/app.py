@@ -61,11 +61,15 @@ def origin_allowed(origin: str | None, host: str) -> bool:
 def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        await gateway.compat.start()
         gateway.start()
         try:
             yield
         finally:
-            await gateway.stop()
+            try:
+                await gateway.compat.stop()
+            finally:
+                await gateway.stop()
 
     app = FastAPI(
         title="Tekmar 482 / tN4 console",
@@ -91,7 +95,11 @@ def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
 
     @app.get("/api/state")
     async def state() -> dict[str, Any]:
-        return gateway.feed.snapshot()
+        return {**gateway.feed.snapshot(), "clients": gateway.compat.snapshot()}
+
+    @app.get("/api/clients")
+    async def clients() -> dict[str, Any]:
+        return gateway.compat.snapshot()
 
     @app.get("/api/peers/{key}")
     async def peer(key: str) -> dict[str, Any]:
@@ -261,6 +269,7 @@ def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
             cursor = None
             while True:
                 update = feed.snapshot(cursor)
+                update["clients"] = gateway.compat.snapshot()
                 cursor = update["seq"]
                 ready = feed.changed
                 await ws.send_json(update)

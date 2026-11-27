@@ -94,7 +94,7 @@ function setPage(which) {
       ? [trafficPanel(null, (key) => traceTabs.devices.name(key))]
       : []),
   );
-  for (const id of ["monitor", "operations", "diagnostics"])
+  for (const id of ["monitor", "operations", "diagnostics", "clients"])
     $("#" + id).hidden = id !== which;
   $$("[data-page]").forEach((b) =>
     b.classList.toggle("selected", b.dataset.page === which),
@@ -102,6 +102,7 @@ function setPage(which) {
   $("#title").textContent = $("#crumb").textContent = {
     monitor: "Network monitor",
     diagnostics: "Diagnostics",
+    clients: "Clients",
     operations: "Operations",
   }[which];
   render();
@@ -214,6 +215,10 @@ function render() {
     );
   if (page === "diagnostics") {
     renderDiagnostics();
+    return;
+  }
+  if (page === "clients") {
+    renderClients(state.clients);
     return;
   }
   if (page === "operations") {
@@ -675,6 +680,48 @@ async function peerDetails(p) {
     showResult(e.message);
   }
 }
+function renderClients(c) {
+  const live = c?.active ?? [],
+    recent = c?.recent ?? [];
+  $("#client-listener").textContent = !connected
+    ? "Disconnected"
+    : !c?.listening
+      ? "Disabled"
+      : c.available
+        ? "Listening"
+        : "Waiting for gateway";
+  $("#client-binding").textContent = c?.listening
+    ? `TCP · ${c.host.includes(":") ? "[" + c.host + "]" : c.host}:${c.port}`
+    : "";
+  $("#client-active").textContent = number(live.length);
+  $("#client-total").textContent = number(c?.total ?? 0);
+  $("#client-withheld").textContent = number(c?.withheld ?? 0);
+  const label = (s) => (s ? tidy(s.toLowerCase()) : null);
+  rows(
+    $("#client-rows"),
+    live,
+    "No compatibility clients connected",
+    8,
+    (p) => [
+      p.peer,
+      stamp(p.connected),
+      number(p.received),
+      number(p.sent),
+      number(p.filtered),
+      label(p.last_request),
+      label(p.last_reply),
+      p.activity ? stamp(p.activity) : null,
+    ],
+  );
+  rows($("#client-history"), recent, "No recent disconnects", 5, (p) => [
+    p.peer,
+    stamp(p.closed),
+    number(p.received),
+    number(p.sent),
+    p.reason,
+  ]);
+}
+
 function renderDiagnostics() {
   const st = state.status,
     facts = $("#facts");

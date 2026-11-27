@@ -97,9 +97,13 @@ class Feed:
             tick = int(now)
             count = buckets.pop()[1] if buckets and buckets[-1][0] == tick else 0
             buckets.append((tick, count + 1))
+        self.wake()
+        return event
+
+    def wake(self) -> None:
+        """Notify dashboards of a state change without inventing a trace event."""
         self.changed.set()
         self.changed = asyncio.Event()
-        return event
 
     def state(self, message: str, **values: Any) -> None:
         self.status.update(values)

@@ -37,6 +37,7 @@ from tekmar_482.raw import InvalidCapture, PortError, TxResult, decode_raw_packe
 from tekmar_482.wire_trace import observe_bridge_packets
 
 from . import operations
+from .compat import Compatibility
 from .devices import Inventory
 from .endpoints import native_endpoints, trpc_endpoints
 from .feed import Feed, Row, data
@@ -54,6 +55,8 @@ class Gateway:
         vendor: bool = False,
         mode: str = "normal",
         errors: bool = True,
+        compat_host: str = "127.0.0.1",
+        compat_port: int | None = None,
     ) -> None:
         self.endpoint, self.vendor, self.mode, self.errors = (
             endpoint,
@@ -65,6 +68,7 @@ class Gateway:
         self.ack_ports: tuple[int, ...] = ()
         self.error_sources = tuple(ErrorSource)
         self.feed = Feed()
+        self.compat = Compatibility(compat_host, compat_port, self.feed.wake)
         self.inventory = Inventory(self.feed)
         self.scan: asyncio.Task[None] | None = None
         self.task: asyncio.Task[None] | None = None
@@ -189,6 +193,7 @@ class Gateway:
             trace = NormalTrace(512)
             stack.enter_context(client.session.trace_packets(trace))
         self.client = client
+        stack.enter_context(self.compat.attach(client))
         stack.enter_context(client.session.observe_messages(self.inventory.observe))
         async with asyncio.TaskGroup() as tasks:
             identify = (

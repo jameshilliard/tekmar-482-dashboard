@@ -370,6 +370,10 @@ label {
   border-block: 1px solid var(--line);
   background: white;
 }
+.client-table td {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 table {
   border-collapse: separate;
   border-spacing: 0;

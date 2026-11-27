@@ -19,6 +19,34 @@ TCP requires a transparent serial bridge set to the same baud rate as
 is needed. The custom firmware is the default. Use `--vendor` to monitor
 stock tRPC without native tracing or gateway error counters.
 
+## Compatibility clients
+
+The dashboard can also replace the packet server for the
+[WillCodeForCats integration](https://github.com/WillCodeForCats/tekmar-482).
+Enable the separate TCP listener explicitly:
+
+```sh
+uv run --extra serial tekmar-482-dashboard --serial /dev/ttyUSB0 --host 0.0.0.0 --compat-port 3000
+```
+
+Point the integration's packet-server host and port at this machine and port
+3000. The HTTP port is not the packet-server port. The listener inherits
+`--host`; use `--compat-host` to bind it to a different interface.
+It has no authentication, including when a web operator key is configured.
+Enable it only for trusted clients: their stock updates can change real
+device settings. The upstream 0.9.34 integration also sends a periodic
+DateTime update; a passive test installation must suppress its timekeeper.
+
+In Normal mode, every peer sees the gateway's original stock tRPC replies
+and reports, including replies caused by other clients. Valid requests and
+updates are forwarded, not answered from a dashboard cache. ReportingState
+and SetbackEnable are real, shared gateway settings. Native frames, custom
+methods and diagnostic packets remain available to the dashboard only.
+Entering Raw mode, losing the gateway or running an exclusive operation
+disconnects these clients; no buffered command is replayed on reconnect.
+The **Clients** tab shows the listener, active peers, directional counts,
+filtered input, recent activity and the last 16 disconnects.
+
 ## Monitor
 
 Normal mode displays inventory, reported settings, native traffic in both
