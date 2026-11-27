@@ -58,7 +58,7 @@ class FeedTests(unittest.TestCase):
 
     def test_normal_transfer_headers_and_embedded_native_bytes(self) -> None:
         for wire, last, quality in (
-            ("0401f04b54 020005bf01", "Feature flags: 447", "good"),
+            ("0401f04b54 020005bf06", "Feature flags: 1727", "good"),
             ("0012f04b54 03df03", "NetworkInitRequest: 0x3DF", "good"),
             ("0012f04b54 03ff02 07e001", "tN4 payload", "good"),
             ("0312f04b54 031f02 0401", "tN4 payload", "good"),
@@ -66,7 +66,11 @@ class FeedTests(unittest.TestCase):
             ("0212f04b54 0301", "TX: No ACK", "good"),
             ("0212f04b54 03ff", "TX: Expired before send", "good"),
             ("0212f04b54 03fc", "TX: 0xfc", "partial"),
-            ("010ff04b54 02120103000000", "Selector: 0", "good"),
+            (
+                "010ff04b54 02120100004003000000",
+                "Selector: 0",
+                "good",
+            ),
             (
                 "0011f04b54 02120103000000 0703010409000409",
                 "Proposed fields: 00 04 09",
@@ -80,6 +84,11 @@ class FeedTests(unittest.TestCase):
                 "good",
             ),
             ("020ff04b54 02000101000000 6e712846030007010409", "Native frame", None),
+            (
+                "020ff04b54 02040101000000 6e712846030007010409",
+                "Native frame",
+                None,
+            ),
             ("020ff04b54 02000101000000 6e", "Invalid native frame", "error"),
         ):
             with self.subTest(wire=wire):
@@ -92,6 +101,20 @@ class FeedTests(unittest.TestCase):
                     self.assertEqual(trpc_quality(packet, msg, spans)[0], quality)
                 if last == "Native frame":
                     self.assertEqual(len(spans[-1]["children"]), 2)
+
+    def test_block_bitmap_and_continuation_map_to_their_exact_wire_bytes(self) -> None:
+        for wire, label, expected in [
+            ("010ff04b54 02120100004003000000", "Node mask: 0x40000001 (1, 31)", 4),
+            (
+                "020ff04b54 02040101000000 6e712846030007010409",
+                "Read result: more peers",
+                1,
+            ),
+        ]:
+            packet = Packet(6, bytes.fromhex(wire))
+            spans = trpc_spans(packet, TrpcPacket.from_packet(packet))
+            (item,) = [s for s in spans if s["label"] == label]
+            self.assertEqual(item["size"], expected)
 
     def test_every_byte_is_shown_once_and_unknown_is_not_green(self) -> None:
         for body, quality in [

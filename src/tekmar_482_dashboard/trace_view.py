@@ -22,21 +22,26 @@ from tekmar_482.trpc import method_spec
 from .native_layout import native_spans
 from .wire_layout import Span, Values, group, span
 
-_BLOCK_QUERY = [
-    (1, "Bus"),
-    (1, "Subnet"),
-    (1, "Node"),
+_BLOCK_SELECTOR = [
     (2, "Block"),
     (1, "Selector mask"),
     (1, "Selector"),
 ]
+_BLOCK_RESULTS = {
+    0: "complete",
+    1: "expired",
+    2: "pin unavailable",
+    3: "link fault",
+    4: "more peers",
+    5: "control queue full",
+}
 
 
 def transfer_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
     method, service, body = message.method_id, message.service, message.extra
     if service in {TrpcService.REQUEST, TrpcService.RESPONSE_REQUEST}:
-        if method == BridgeMethod.NORMAL_BLOCK_READ and len(body) == 7:
-            return _BLOCK_QUERY
+        if method == BridgeMethod.NORMAL_BLOCK_READ and len(body) == 10:
+            return [(1, "Bus"), (1, "Subnet"), (4, "Node mask"), *_BLOCK_SELECTOR]
         if method == BridgeMethod.NORMAL_STATUS_READ and len(body) >= 6:
             return [
                 (1, "Bus"),
@@ -53,7 +58,10 @@ def transfer_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
             n = body[8]
             if 0 < n < len(body) - 9:
                 return [
-                    *_BLOCK_QUERY,
+                    (1, "Bus"),
+                    (1, "Subnet"),
+                    (1, "Node"),
+                    *_BLOCK_SELECTOR,
                     (1, "Support mask"),
                     (1, "Baseline length"),
                     (n, "Baseline fields"),
@@ -66,10 +74,13 @@ def transfer_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
         if method == BridgeMethod.NORMAL_BLOCK_READ:
             prefix.append((1, "Request TX"))
         if method in {BridgeMethod.NORMAL_BLOCK_READ, BridgeMethod.NORMAL_STATUS_READ}:
-            if body[1] and len(body) == 3:
+            frame_result = body[1] == 0 or (
+                method == BridgeMethod.NORMAL_BLOCK_READ and body[1] == 4
+            )
+            if not frame_result and len(body) == 3:
                 return [*prefix[:2], (1, "Request TX")]
             size = len(body) - len(prefix) - 4
-            if not body[1] and size > 0:
+            if frame_result and size > 0:
                 return [*prefix, (4, "Gateway ms"), (size, "Native frame")]
     return None
 
@@ -351,6 +362,21 @@ def trpc_spans(packet: Packet, message: TrpcPacket) -> list[Span]:
                 break
             if label == "Native frame":
                 result.append(embedded_frame(message.extra[0], part))
+            elif label == "Node mask":
+                mask = int.from_bytes(part, "little")
+                nodes = ", ".join(str(i + 1) for i in range(31) if mask & (1 << i))
+                result.append(span(part, f"Node mask: {mask:#010x} ({nodes})", "field"))
+            elif (
+                label == "Read result"
+                and message.method_id == BridgeMethod.NORMAL_BLOCK_READ
+            ):
+                result.append(
+                    span(
+                        part,
+                        f"Read result: {_BLOCK_RESULTS.get(part[0], part[0])}",
+                        "field" if part[0] in _BLOCK_RESULTS else "unknown",
+                    )
+                )
             elif label in {"Baseline fields", "Proposed fields"}:
                 result.append(span(part, f"{label}: {part.hex(' ')}", "unknown"))
             else:
