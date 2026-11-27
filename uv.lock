@@ -728,7 +728,7 @@ wheels = [
 [[package]]
 name = "tekmar-482"
 version = "0.1.0"
-source = { git = "https://github.com/jameshilliard/tekmar-482.git?rev=11d39ac4129898397cc56d0e043aa6e954ede575#11d39ac4129898397cc56d0e043aa6e954ede575" }
+source = { git = "https://github.com/jameshilliard/tekmar-482.git?rev=3a526cc489a8759ce29490943d118757b4d2397a#3a526cc489a8759ce29490943d118757b4d2397a" }
 
 [package.optional-dependencies]
 serial = [
@@ -762,8 +762,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "tekmar-482", git = "https://github.com/jameshilliard/tekmar-482.git?rev=11d39ac4129898397cc56d0e043aa6e954ede575" },
-    { name = "tekmar-482", extras = ["serial"], marker = "extra == 'serial'", git = "https://github.com/jameshilliard/tekmar-482.git?rev=11d39ac4129898397cc56d0e043aa6e954ede575" },
+    { name = "tekmar-482", git = "https://github.com/jameshilliard/tekmar-482.git?rev=3a526cc489a8759ce29490943d118757b4d2397a" },
+    { name = "tekmar-482", extras = ["serial"], marker = "extra == 'serial'", git = "https://github.com/jameshilliard/tekmar-482.git?rev=3a526cc489a8759ce29490943d118757b4d2397a" },
     { name = "uvicorn", specifier = ">=0.32" },
     { name = "websockets", specifier = ">=14" },
 ]

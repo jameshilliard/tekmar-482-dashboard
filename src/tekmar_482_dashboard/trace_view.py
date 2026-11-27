@@ -16,13 +16,71 @@ from tekmar_482 import (
 from tekmar_482.management import BridgeMethod
 from tekmar_482.trpc import method_spec
 
-from .wire_layout import Span, Values, span
+from .native_layout import native_spans
+from .wire_layout import Span, Values, group, span
+
+_BLOCK_QUERY = [
+    (1, "Bus"),
+    (1, "Subnet"),
+    (1, "Node"),
+    (2, "Block"),
+    (1, "Selector mask"),
+    (1, "Selector"),
+]
+
+
+def transfer_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
+    method, service, body = message.method_id, message.service, message.extra
+    if service in {TrpcService.REQUEST, TrpcService.RESPONSE_REQUEST}:
+        if method == BridgeMethod.NORMAL_BLOCK_READ and len(body) == 7:
+            return _BLOCK_QUERY
+        if method == BridgeMethod.NORMAL_STATUS_READ and len(body) >= 6:
+            return [
+                (1, "Bus"),
+                (1, "Peer filter"),
+                (1, "Subnet"),
+                (1, "Node"),
+                (2, "Native request ID"),
+            ]
+    if method == BridgeMethod.NORMAL_BLOCK_EDIT:
+        if (
+            service in {TrpcService.UPDATE, TrpcService.RESPONSE_UPDATE}
+            and len(body) > 9
+        ):
+            n = body[8]
+            if 0 < n < len(body) - 9:
+                return [
+                    *_BLOCK_QUERY,
+                    (1, "Support mask"),
+                    (1, "Baseline length"),
+                    (n, "Baseline fields"),
+                    (len(body) - 9 - n, "Proposed fields"),
+                ]
+        if service is TrpcService.REPORT and len(body) == 4:
+            return [(1, "Bus"), (1, "Edit result"), (1, "Guard TX"), (1, "Update TX")]
+    if service is TrpcService.REPORT and len(body) >= 3:
+        prefix = [(1, "Bus"), (1, "Read result")]
+        if method == BridgeMethod.NORMAL_BLOCK_READ:
+            prefix.append((1, "Request TX"))
+        if method in {BridgeMethod.NORMAL_BLOCK_READ, BridgeMethod.NORMAL_STATUS_READ}:
+            if body[1] and len(body) == 3:
+                return [*prefix[:2], (1, "Request TX")]
+            size = len(body) - len(prefix) - 4
+            if not body[1] and size > 0:
+                return [*prefix, (4, "Gateway ms"), (size, "Native frame")]
+    return None
 
 
 def management_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
     method, service, body = message.method_id, message.service, message.extra
     if method not in BridgeMethod or service is None:
         return None
+    if method in {
+        BridgeMethod.NORMAL_BLOCK_READ,
+        BridgeMethod.NORMAL_BLOCK_EDIT,
+        BridgeMethod.NORMAL_STATUS_READ,
+    }:
+        return transfer_fields(message)
     if method == BridgeMethod.TRAFFIC_COUNTS:
         path = [(1, "Bus"), (1, "Subnet"), (1, "Node")]
         totals = [(8, k) for k in ("RX valid", "TX ACK", "TX no ACK", "TX failed")]
@@ -66,12 +124,12 @@ def management_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
         if service == TrpcService.RESPONSE_REQUEST:
             return [(1, "Bus"), (8, "Dropped valid"), (8, "Dropped invalid")]
     if service == TrpcService.RESPONSE_REQUEST:
-        if method == BridgeMethod.CAPABILITIES:
+        if method == BridgeMethod.CAPABILITIES and len(body) >= 4:
             return [
                 (1, "Wire version"),
                 (1, "Mode"),
                 (1, "Port count"),
-                (1, "Feature flags"),
+                (len(body) - 3, "Feature flags"),
             ]
         if method == BridgeMethod.NORMAL_TRACE:
             return [(1, "Trace mask"), *((8, f"Bus {p} drops") for p in range(5))]
@@ -179,9 +237,27 @@ def trpc_quality(
         return "partial", f"Unknown tRPC service 0x{message.service_id:02X}", notice
     if spec is not None and len(packet.data) == 5 + spec.size:
         return "good", "Valid tRPC frame; all fields decoded", notice
-    if message.method_id in BridgeMethod and all(p["kind"] != "unknown" for p in parts):
+    if any(p.get("coverage") == "invalid" for p in parts):
+        return "error", "Invalid embedded native frame", notice
+    if message.method_id in BridgeMethod and all(
+        p["kind"] != "unknown" and p.get("coverage") != "unknown" for p in parts
+    ):
         return "good", "Recognized management fields", notice
     return "partial", "Valid tRPC frame; payload not fully interpreted", notice
+
+
+def embedded_frame(port: int, part: bytes) -> Span:
+    try:
+        frame = NativeFrame(port, 0, part)
+    except ValueError:
+        return {**span(part, "Invalid native frame", "field"), "coverage": "invalid"}
+    meaning = frame.decoded
+    header, payload = native_spans(frame, meaning)
+    item = group("Native frame", [header, payload])
+    quality, _ = native_quality(frame, meaning, payload)
+    if quality != "good":
+        item["coverage"] = "invalid" if quality == "error" else "unknown"
+    return item
 
 
 def trpc_spans(packet: Packet, message: TrpcPacket) -> list[Span]:
@@ -215,12 +291,17 @@ def trpc_spans(packet: Packet, message: TrpcPacket) -> list[Span]:
             part = raw[offset : offset + width]
             if len(part) != width:
                 break
-            value = (
-                part.decode("ascii")
-                if label == "Build"
-                else int.from_bytes(part, "little")
-            )
-            result.append(span(part, f"{label}: {value}", "field"))
+            if label == "Native frame":
+                result.append(embedded_frame(message.extra[0], part))
+            elif label in {"Baseline fields", "Proposed fields"}:
+                result.append(span(part, f"{label}: {part.hex(' ')}", "unknown"))
+            else:
+                value = (
+                    part.decode("ascii")
+                    if label == "Build"
+                    else int.from_bytes(part, "little")
+                )
+                result.append(span(part, f"{label}: {value}", "field"))
             offset += width
     if raw[offset:]:
         result.append(

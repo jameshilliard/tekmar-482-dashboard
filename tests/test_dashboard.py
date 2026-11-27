@@ -26,12 +26,43 @@ from tekmar_482_dashboard.gateway import Gateway
 from tekmar_482_dashboard.main import operator_key
 from tekmar_482_dashboard.native_layout import native_spans
 from tekmar_482_dashboard.operations import arguments, display_result
-from tekmar_482_dashboard.trace_view import native_quality, trpc_spans
+from tekmar_482_dashboard.trace_view import native_quality, trpc_quality, trpc_spans
+from tekmar_482_dashboard.wire_layout import diagram, group
 
 ENDPOINT = GatewayEndpoint.tcp("192.0.2.1", 3001)
 
 
 class FeedTests(unittest.TestCase):
+    def test_normal_transfer_headers_and_embedded_native_bytes(self) -> None:
+        for wire, last, quality in (
+            ("0401f04b54 020005bf01", "Feature flags: 447", "good"),
+            ("010ff04b54 02120103000000", "Selector: 0", "good"),
+            (
+                "0011f04b54 02120103000000 0703010409000409",
+                "Proposed fields: 00 04 09",
+                "partial",
+            ),
+            ("0211f04b54 020100ff", "Update TX: 255", "good"),
+            ("0210f04b54 020201", "Request TX: 1", "good"),
+            (
+                "0210f04b54 020001000000 76f0060800032b0a06000000",
+                "Native frame",
+                "good",
+            ),
+            ("020ff04b54 02000101000000 6e712846030007010409", "Native frame", None),
+            ("020ff04b54 02000101000000 6e", "Invalid native frame", "error"),
+        ):
+            with self.subTest(wire=wire):
+                packet = Packet(6, bytes.fromhex(wire))
+                msg = TrpcPacket.from_packet(packet)
+                spans = trpc_spans(packet, msg)
+                diagram(packet, group("tRPC", spans))
+                self.assertEqual(spans[-1]["label"], last)
+                if quality is not None:
+                    self.assertEqual(trpc_quality(packet, msg, spans)[0], quality)
+                if last == "Native frame":
+                    self.assertEqual(len(spans[-1]["children"]), 2)
+
     def test_every_byte_is_shown_once_and_unknown_is_not_green(self) -> None:
         for body, quality in [
             ("76f00608 00032b0a06000000", "good"),
