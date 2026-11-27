@@ -11,8 +11,10 @@ from tekmar_482 import (
     GatewayEndpoint,
     NativeFrame,
     NativePath,
+    NormalTraceState,
     Packet,
     PortTraffic,
+    Tekmar482Client,
     TrafficCounters,
     TrpcPacket,
 )
@@ -23,7 +25,7 @@ from tekmar_482_dashboard.feed import Feed
 from tekmar_482_dashboard.gateway import Gateway
 from tekmar_482_dashboard.main import operator_key
 from tekmar_482_dashboard.native_layout import native_spans
-from tekmar_482_dashboard.operations import arguments
+from tekmar_482_dashboard.operations import arguments, display_result
 from tekmar_482_dashboard.trace_view import native_quality, trpc_spans
 
 ENDPOINT = GatewayEndpoint.tcp("192.0.2.1", 3001)
@@ -85,6 +87,20 @@ class FeedTests(unittest.TestCase):
         self.assertFalse(good.confirm)
         self.assertEqual(good.tcp, "192.0.2.1:3001")
 
+    def test_cli_results_preserve_large_integers_and_plain_output(self) -> None:
+        self.assertEqual(
+            display_result(
+                '{\n"presses": 18446744073709551615, "small": 9007199254740991\n}'
+            ),
+            {"presses": "18446744073709551615", "small": 9007199254740991},
+        )
+        self.assertEqual(
+            display_result('{"count":9007199254740993}\n{"count":0}'),
+            [{"count": "9007199254740993"}, {"count": 0}],
+        )
+        self.assertEqual(display_result("No response"), "No response")
+        self.assertEqual(display_result(""), "")
+
     def test_optional_key_is_private_and_reusable(self) -> None:
         with TemporaryDirectory() as dest:
             path = Path(dest) / "operator.key"
@@ -128,6 +144,23 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(client.get("/api/traffic/2/66/1").json()["tx_ack"], str(2**56))
         reader.device.assert_awaited_once_with(path)
         self.assertEqual(client.get("/api/traffic/2/66/32").status_code, 422)
+
+    def test_trace_drop_totals_are_exact_at_the_browser_boundary(self) -> None:
+        client, gw = self.make_client()
+        gw.feed.status["connection"] = "online"
+        gw.client = AsyncMock(spec=Tekmar482Client)
+        drops = (0, 1, 2**53 - 1, 2**53 + 1, 2**64 - 1)
+        with patch("tekmar_482_dashboard.gateway.BridgeManagement", autospec=True) as m:
+            m.return_value.trace_state.return_value = NormalTraceState(31, drops)
+            resp = client.post(
+                "/api/operations", json={"name": "trace-state", "confirmed": True}
+            )
+            m.return_value.trace_state.assert_awaited_once_with()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp.json()["result"],
+            {"port_mask": 31, "gateway_drops": list(map(str, drops))},
+        )
 
     def test_structured_tool_descriptors_include_subcommands_and_known_registers(
         self,

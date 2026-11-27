@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 from io import StringIO
 from typing import Any, Never
@@ -59,6 +60,7 @@ PROTECTED = {
     "-h",
 }
 REQUIRES_CONFIRM = {*GROUPS["Device controls"], *GROUPS["Line controls"], "update"}
+_MAX_SAFE_JS_INTEGER = (1 << 53) - 1
 
 
 def parsers() -> dict[str, argparse.ArgumentParser]:
@@ -176,9 +178,31 @@ class Output(StringIO):
         return super().write(s)
 
 
-async def execute(args: argparse.Namespace) -> str:
+def _browser_int(token: str) -> int | str:
+    value = int(token)
+    return value if abs(value) <= _MAX_SAFE_JS_INTEGER else token
+
+
+def display_result(output: str) -> object:
+    """Decode CLI output before a browser can round a 64-bit counter."""
+    if not output:
+        return output
+    try:
+        return json.loads(output, parse_int=_browser_int)
+    except json.JSONDecodeError:
+        try:
+            return [
+                json.loads(line, parse_int=_browser_int)
+                for line in output.splitlines()
+                if line.strip()
+            ]
+        except json.JSONDecodeError:
+            return output
+
+
+async def execute(args: argparse.Namespace) -> object:
     out = Output()
     code = await run(args, stdout=out)
     if code:
         raise RuntimeError(f"Client operation returned {code}: {out.getvalue()}")
-    return out.getvalue().strip()
+    return display_result(out.getvalue().strip())

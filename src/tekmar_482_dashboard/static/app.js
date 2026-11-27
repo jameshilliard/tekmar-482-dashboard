@@ -852,17 +852,6 @@ $("#auth-form").onsubmit = async (e) => {
 };
 function showResult(output) {
   $("#output").hidden = false;
-  if (typeof output === "string") {
-    try {
-      output = JSON.parse(output);
-    } catch {
-      try {
-        output = output.split("\n").map((s) => JSON.parse(s));
-      } catch {
-        /* Plain text. */
-      }
-    }
-  }
   $("#result").replaceChildren(
     typeof output === "object" && output !== null
       ? facts(output)

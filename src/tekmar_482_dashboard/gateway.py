@@ -594,7 +594,7 @@ class Gateway:
                 )
                 self._invalid(Packet(TYPE_TN4, prefix + record.bits), record)
 
-    async def command(self, name: str, args: list[str], apply: bool) -> str:
+    async def command(self, name: str, args: list[str], apply: bool) -> object:
         # Validate before interrupting capture. Never retry an operator operation.
         parsed = operations.arguments(self.endpoint, self.vendor, name, args, apply)
         if self.lock.locked():
@@ -679,7 +679,11 @@ class Gateway:
             if name == "device-setting" and apply and self.client:
                 return await self.inventory.set(self.client, values)
             if name == "trace-state" and self.client and not self.vendor:
-                return data(await BridgeManagement(self.client).trace_state())
+                state = await BridgeManagement(self.client).trace_state()
+                return {
+                    "port_mask": state.port_mask,
+                    "gateway_drops": [str(n) for n in state.gateway_drops],
+                }
             if name == "error-read" and self.diagnostics:
                 counter = await self.diagnostics.counter(
                     ErrorSource(int(values["source"])), ErrorReason[values["reason"]]
