@@ -26,6 +26,7 @@ from tekmar_482 import (
     Tekmar482Client,
     TraceRx,
     TraceTx,
+    TrafficCounters,
     TrpcMethod,
     TrpcPacket,
     TrpcService,
@@ -70,6 +71,7 @@ class Gateway:
         self.lock = asyncio.Lock()
         self.client: Tekmar482Client | None = None
         self.raw: BridgeStream | None = None
+        self.traffic: TrafficCounters | None = None
         self.diagnostics: ErrorReporting | None = None
         self.feed.status.update(
             baudrate=endpoint.baudrate,
@@ -139,6 +141,8 @@ class Gateway:
                                     diagnostics=False, ack_ports=self.ack_ports
                                 )
                             )
+                            if caps.features & BridgeFeature.TRAFFIC_COUNTS:
+                                self.traffic = self.raw.traffic
                             self.diagnostics = (
                                 self.raw.error_reporting
                                 if caps.features & BridgeFeature.ERROR_REPORTING
@@ -166,7 +170,7 @@ class Gateway:
                     problem=str(err) or type(err).__name__,
                 )
             finally:
-                self.client = self.raw = self.diagnostics = None
+                self.client = self.raw = self.diagnostics = self.traffic = None
             await asyncio.sleep(delay)
             delay = min(15, delay * 2)
 
@@ -174,6 +178,7 @@ class Gateway:
         self, stack: AsyncExitStack, client: Tekmar482Client, flags: BridgeFeature
     ) -> None:
         manager = BridgeManagement(client)
+        self.traffic = manager.traffic if flags & BridgeFeature.TRAFFIC_COUNTS else None
         self.diagnostics = (
             manager.error_reporting if flags & BridgeFeature.ERROR_REPORTING else None
         )
@@ -346,7 +351,7 @@ class Gateway:
         why = str(data(record.reason)).replace("_", " ")
         prefix = [
             *self._prefix("Invalid RX", record.port, record.timestamp_ms),
-            field(1, f"Failure: {why}", "unknown"),
+            field(1, f"Failure: {why}", "envelope"),
             field(2, f"Bit count: {record.bit_count}", "envelope"),
         ]
         parts = [group("Record", prefix, column="record")]
@@ -355,6 +360,7 @@ class Gateway:
                 len(record.bits), "Captured tN4 bits (MSB first)", "unknown"
             )
             captured["column"] = "payload"
+            captured["coverage"] = "invalid"
             parts.append(captured)
         self.feed.publish(
             "tn4",

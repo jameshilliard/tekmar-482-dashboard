@@ -34,6 +34,11 @@ Click an endpoint or use **End device** to filter by a source or explicit
 destination. A bus-wide broadcast is not attributed to individual devices.
 Open a device icon for its complete configuration and available controls.
 
+Diagnostics and device dialogs can read the gateway's own 64-bit traffic
+counters. These keep counting with no connected browser or host. Port totals
+include invalid RX and non-addressed TX; device totals include valid RX and
+explicitly unicast block TX, split by link outcome. Counts restart at boot.
+
 Protocol fields occupy fixed columns. Open a frame for one nested, wire-order
 diagram with escaped bytes, offsets and bit ranges. Green marks decoded data;
 amber hatching marks the specific unresolved bits or bytes. Red means invalid
@@ -47,8 +52,10 @@ not a byte-for-byte recording of malformed UART traffic.
 
 Monitoring reads inventory and configuration; it does not set connected
 device parameters. Review and confirm a control operation before it is
-sent. Some exclusive client tools briefly suspend capture. Firmware
-updates require a client installed from a firmware-bearing source
+sent. Some exclusive client tools briefly suspend capture. Raw frames,
+register edits and schedules use value pickers instead of text commands.
+Raw payload length is calculated from the selected bytes. Firmware updates
+require a client installed from a firmware-bearing source
 distribution; a client wheel built directly from Git has no image.
 
 Controls are unlocked by default. Use only on a trusted LAN; do not

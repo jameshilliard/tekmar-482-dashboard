@@ -82,6 +82,14 @@ def parameters(parser: argparse.ArgumentParser) -> list[dict[str, Any]]:
                 ),
                 "required": action.required,
                 "choices": list(action.choices) if action.choices is not None else [],
+                "variants": {
+                    key: parameters(sub) for key, sub in action.choices.items()
+                }
+                if isinstance(action, argparse._SubParsersAction)
+                else {},
+                "default": action.default
+                if type(action.default) in (int, float)
+                else None,
                 "switch": action.nargs == 0,
                 "repeat": isinstance(action, argparse._AppendAction),
                 "many": action.nargs in {"+", "*"},

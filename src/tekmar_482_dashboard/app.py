@@ -21,7 +21,18 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
-from tekmar_482 import DeviceMode, ErrorReason, ThaSetback, TrpcMethod
+from tekmar_482 import (
+    DeviceMode,
+    ErrorReason,
+    FrameCounts,
+    NativePath,
+    TekmarError,
+    ThaSetback,
+    TrafficCounters,
+    TrpcMethod,
+    WritableBlock,
+)
+from tekmar_482._native_payloads import DECODERS
 from tekmar_482.trpc import method_spec
 
 from .gateway import Gateway
@@ -114,7 +125,7 @@ def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
             "commands": catalog(gateway.vendor),
             "methods": [m.name for m in TrpcMethod],
             "method_fields": {
-                m.name: [f.name for f in spec.fields]
+                m.name: [{"name": f.name, "width": f.size} for f in spec.fields]
                 for m in TrpcMethod
                 if (spec := method_spec(m))
             },
@@ -123,7 +134,71 @@ def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
             "locked": token is not None,
             "modes": [m.name for m in DeviceMode],
             "setbacks": {s.name: int(s) for s in ThaSetback},
+            "native_methods": {k: v[0] for k, v in DECODERS.items()},
+            "blocks": [
+                {"id": b.value, "name": b.name, "fields": [f.label for f in b.fields]}
+                for b in WritableBlock
+            ],
         }
+
+    def traffic() -> TrafficCounters:
+        if gateway.traffic is None:
+            raise HTTPException(409, "Firmware traffic counters are unavailable")
+        return gateway.traffic
+
+    def counts(c: FrameCounts) -> dict[str, str]:
+        # JSON numbers cannot preserve all 64 bits in a browser.
+        return {
+            k: str(getattr(c, k))
+            for k in ("rx_valid", "tx_attempts", "tx_ack", "tx_no_ack", "tx_failed")
+        }
+
+    @app.get("/api/traffic/ports")
+    async def traffic_ports() -> list[dict[str, Any]]:
+        reader = traffic()
+        result = []
+        try:
+            for port in range(5):
+                t = await reader.port(port)
+                result.append(
+                    {
+                        "port": port,
+                        **counts(t.counts),
+                        "rx_invalid": str(t.rx_invalid),
+                        "rx_untracked": str(t.rx_untracked),
+                        "tx_unattributed": str(t.tx_unattributed),
+                    }
+                )
+        except (OSError, TekmarError, TimeoutError) as err:
+            raise HTTPException(503, "Gateway counter read failed") from err
+        return result
+
+    @app.get("/api/traffic/devices")
+    async def traffic_devices() -> list[dict[str, Any]]:
+        try:
+            return [
+                {
+                    "port": d.path.port,
+                    "subnet": d.path.subnet,
+                    "node": d.path.node,
+                    **counts(d.counts),
+                }
+                async for d in traffic().devices()
+            ]
+        except (OSError, TekmarError, TimeoutError) as err:
+            raise HTTPException(503, "Gateway counter read failed") from err
+
+    @app.get("/api/traffic/{port}/{subnet}/{node}")
+    async def traffic_device(
+        port: int, subnet: int, node: int
+    ) -> dict[str, str] | None:
+        if port not in range(5) or subnet not in range(256) or node not in range(32):
+            raise HTTPException(422, "Invalid native path")
+        try:
+            d = await traffic().device(NativePath(port, subnet, node))
+        except (OSError, TekmarError, TimeoutError) as err:
+            raise HTTPException(503, "Gateway counter read failed") from err
+        return counts(d.counts) if d is not None else None
 
     def operator(
         request: Request, authorization: Annotated[str | None, Header()] = None

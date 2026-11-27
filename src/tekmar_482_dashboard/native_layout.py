@@ -399,6 +399,8 @@ def native_spans(frame: NativeFrame, fields: Values) -> tuple[Span, Span]:
         if index >= len(raw):
             break
         if isinstance(field, Packed):
+            if field is SUPPORT:
+                used.add("support_mask")
             part = span(
                 raw[index : index + 1], field.label, "header" if index < 4 else "field"
             )
@@ -454,6 +456,9 @@ def native_spans(frame: NativeFrame, fields: Values) -> tuple[Span, Span]:
                 + f": {val}{unit}"
                 + (" (LE)" if width > 1 and not name.endswith("_hex") else "")
             )
+            if name + "_name" in fields:
+                label += " · " + str(fields[name + "_name"]).replace("_", " ")
+                used.add(name + "_name")
             out = span(chunk, label, "field")
             if name == "code" and fields.get("description") == "Unknown Error":
                 out["coverage"] = "unknown"
@@ -474,7 +479,11 @@ def native_spans(frame: NativeFrame, fields: Values) -> tuple[Span, Span]:
         result.append(span(raw[index:], "Unmapped payload bytes", "unknown"))
     # Keep derived interpretations without repeating the scalar fields or captured bytes.
     extra = {
-        k: v for k, v in fields.items() if k not in used and not k.endswith("_hex")
+        k: v
+        for k, v in fields.items()
+        if k not in used
+        and not k.endswith("_hex")
+        and not (k.startswith("byte") and k.endswith("_raw"))
     }
     payload = group("tN4 payload", result[4:], extra, column="payload")
     uncertain = [

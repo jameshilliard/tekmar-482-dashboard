@@ -233,6 +233,7 @@
         <section id="diagnostics" hidden>
           <div class="section-head"><h2>Gateway status</h2></div>
           <dl class="facts" id="facts"></dl>
+          <div id="traffic-totals"></div>
           <form id="monitor-config" class="work-form">
             <h2>Capture configuration</h2>
             <div class="formrow">
@@ -300,13 +301,9 @@
           <form id="raw" class="work-form" hidden>
             <h2>Raw tN4 transmission</h2>
             <div class="formrow">
-              <label>Bus<select name="port"></select></label
-              ><label
-                >Native body (hex)<input
-                  name="hex"
-                  autocomplete="off"
-                  required /></label
-              ><button>Send once</button>
+              <label>Bus<select name="port"></select></label>
+              <div id="raw-fields" class="formrow"></div>
+              <button>Send once</button>
             </div>
           </form>
           <form id="catalog" class="work-form" hidden>

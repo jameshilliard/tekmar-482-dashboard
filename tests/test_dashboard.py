@@ -5,10 +5,15 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from tekmar_482 import (
+    DeviceTraffic,
     DiscoveredDevice,
+    FrameCounts,
     GatewayEndpoint,
     NativeFrame,
+    NativePath,
     Packet,
+    PortTraffic,
+    TrafficCounters,
     TrpcPacket,
 )
 
@@ -107,6 +112,36 @@ class ServerTests(unittest.TestCase):
                     ws.receive_json()["events"][-1]["name"], "AirGroupMemberStatus"
                 )
             send.assert_not_awaited()
+
+    def test_hardware_traffic_is_read_only_and_json_keeps_u64_precision(self) -> None:
+        client, gw = self.make_client()
+        self.assertEqual(client.get("/api/traffic/ports").status_code, 409)
+        reader = AsyncMock(spec=TrafficCounters)
+        gw.traffic = reader
+        count = FrameCounts(2**64 - 1, 2**56, 1, 0)
+        reader.port.side_effect = [PortTraffic(p, count, 1, 0, 2) for p in range(5)]
+        result = client.get("/api/traffic/ports").json()
+        self.assertEqual(result[4]["rx_valid"], str(2**64 - 1))
+        self.assertEqual(result[0]["tx_attempts"], str(2**56 + 1))
+        path = NativePath(2, 0x42, 1)
+        reader.device.return_value = DeviceTraffic(path, count)
+        self.assertEqual(client.get("/api/traffic/2/66/1").json()["tx_ack"], str(2**56))
+        reader.device.assert_awaited_once_with(path)
+        self.assertEqual(client.get("/api/traffic/2/66/32").status_code, 422)
+
+    def test_structured_tool_descriptors_include_subcommands_and_known_registers(
+        self,
+    ) -> None:
+        client, _ = self.make_client()
+        spec = client.get("/api/catalog").json()
+        cmd = next(c for c in spec["commands"] if c["name"] == "read-status")
+        variants = cmd["parameters"][0]["variants"]
+        self.assertIn("selector", [p["name"] for p in variants["humidity"]])
+        self.assertTrue(all(b["fields"] for b in spec["blocks"]))
+        self.assertIn(
+            {"name": "address", "width": 2},
+            spec["method_fields"]["CURRENT_TEMPERATURE"],
+        )
 
     def test_no_key_by_default_but_confirmation_and_origin_required(self) -> None:
         client, gw = self.make_client()

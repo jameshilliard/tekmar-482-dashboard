@@ -140,6 +140,34 @@ def check(page: Page, url: str, screenshots: Path | None) -> None:
     assert any(name == "Away" for name, _ in fixture)
     if screenshots:
         page.screenshot(path=screenshots / f"devices-{page.viewport_size['width']}.png")
+    page.locator('[data-page="operations"]').click()
+    page.locator('[data-operation="catalog"]').click()
+    forms = page.locator("#operations")
+    for name in forms.locator('[name="command"] option').evaluate_all(
+        "opts=>opts.map(o=>o.value)"
+    ):
+        forms.locator('[name="command"]').select_option(name)
+        assert not forms.locator(
+            "input:not([type=checkbox]), textarea, [contenteditable=true]"
+        ).count(), name
+    forms.locator('[name="command"]').select_option("read-status")
+    forms.locator('[data-param="status_service"]').select_option("humidity")
+    assert forms.locator('[data-param="selector"]').is_visible()
+    forms.locator('[name="command"]').select_option("write-block")
+    assert forms.get_by_role("button", name="Add field", exact=True).is_visible()
+    forms.locator('[data-operation="raw"]').click()
+    raw = forms.locator("#raw")
+    raw.get_by_role("button", name="Add byte").click()
+    raw.get_by_label("Payload byte", exact=True).select_option("CA")
+    raw.get_by_role("button", name="Send once").click()
+    expect(page.locator("#confirm")).to_be_visible()
+    expect(page.locator("#review")).to_contain_text("40000001CA")
+    page.locator("#confirm [data-close]").first.click()
+    forms.locator('[data-operation="trpc"]').click()
+    forms.locator("#trpc [name=method]").select_option("CURRENT_TEMPERATURE")
+    forms.locator("#trpc button[type=submit], #trpc button:not([type])").last.click()
+    expect(page.locator("#confirm")).to_be_visible()
+    page.locator("#confirm [data-close]").first.click()
     assert not failures, failures
 
 

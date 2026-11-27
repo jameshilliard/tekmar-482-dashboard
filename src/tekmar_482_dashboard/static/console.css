@@ -647,10 +647,9 @@ dialog .work-form button {
 @media (min-width: 64rem) {
   .frame-diagram {
     display: grid;
-    grid-template-columns: max-content max-content max-content minmax(
-        0,
-        auto
-      ) max-content max-content;
+    grid-template-columns:
+      max-content max-content max-content minmax(0, auto)
+      max-content max-content;
     justify-content: start;
     align-items: start;
   }
@@ -920,6 +919,98 @@ dialog .work-form button {
 }
 .trace-row {
   cursor: pointer;
+}
+.operation-field {
+  display: grid;
+  gap: 3px;
+  align-content: start;
+  min-width: 0;
+  max-width: 100%;
+}
+.operation-field > strong {
+  font:
+    550 0.78rem system-ui,
+    sans-serif;
+  color: #3b5148;
+}
+.value-widget,
+.choice-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+}
+.value-rows {
+  display: grid;
+  gap: 3px;
+}
+.optional-widget {
+  margin: 0;
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.optional-widget:disabled {
+  opacity: 0.48;
+}
+.hex-word > select {
+  min-width: 2.7rem;
+  width: 2.7rem;
+  padding: 2px;
+  font: 0.8rem var(--mono);
+}
+.value-widget .widget-btn {
+  height: 30px;
+  width: 30px;
+  min-width: 0;
+  padding: 4px;
+}
+.widget-btn img {
+  width: 16px;
+  height: 16px;
+}
+.widget-btn.increase img {
+  transform: rotate(-90deg);
+}
+.widget-btn.decrease img {
+  transform: rotate(90deg);
+}
+.value-widget output {
+  padding: 2px 5px;
+  font: 0.81rem var(--mono);
+}
+.choice-list label {
+  display: flex;
+  flex-direction: row;
+  gap: 3px;
+  align-items: center;
+}
+.operation-children {
+  flex-basis: 100%;
+}
+.traffic-table {
+  overflow-x: auto;
+  max-width: 100%;
+  margin: 4px 0;
+}
+.traffic-table table {
+  width: max-content;
+  min-width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+.traffic-table th,
+.traffic-table td {
+  position: static;
+  white-space: nowrap;
+  padding: 3px 8px;
+  font-size: 0.78rem;
+}
+.traffic-table td {
+  text-align: right;
+  font-family: var(--mono);
+}
+.traffic-panel {
+  margin: 8px 0;
 }
 .trace-row:hover td,
 .trace-row:focus-visible td {

@@ -1,3 +1,5 @@
+import { rawEditor, toolEditors, transactionEditors } from "./controls.js";
+import { trafficPanel } from "./traffic.js";
 import { parameters as facts, thermostatSummary } from "./parameters.js";
 import { deviceCard, instrument, tracePath, packet } from "./instruments.js";
 import { TraceTabs } from "./traces.js";
@@ -87,6 +89,11 @@ const rows = (body, data, empty, width, cells, click) => {
 };
 function setPage(which) {
   page = which;
+  $("#traffic-totals").replaceChildren(
+    ...(which === "diagnostics"
+      ? [trafficPanel(null, (key) => traceTabs.devices.name(key))]
+      : []),
+  );
   for (const id of ["monitor", "operations", "diagnostics"])
     $("#" + id).hidden = id !== which;
   $$("[data-page]").forEach((b) =>
@@ -348,6 +355,7 @@ function showCards(peers) {
         openDetail("tekmar 482 · Gateway", [
           el("h3", "Gateway configuration"),
           facts(s),
+          trafficPanel(null, (key) => traceTabs.devices.name(key)),
           btn("Open diagnostics", () => {
             $("#detail").close();
             setPage("diagnostics");
@@ -431,7 +439,11 @@ async function deviceDetails(address) {
     }
     for (const p of d.native_sources || []) {
       const group = el("section");
-      group.append(el("h3", "Native configuration · " + p.key), facts(p));
+      group.append(
+        el("h3", "Native configuration · " + p.key),
+        trafficPanel(p),
+        facts(p),
+      );
       body.push(group);
     }
     openDetail(
@@ -656,6 +668,7 @@ async function peerDetails(p) {
         frames: p.count,
       }),
       actions,
+      ...(p.node != null ? [trafficPanel(p)] : []),
       full,
     ]);
   } catch (e) {
@@ -920,124 +933,58 @@ $("#read-error").onsubmit = (e) => {
     values: { source: Number(f.source.value), reason: f.reason.value },
   });
 };
+let readTransaction, readRaw, readTool;
 function trpcFields() {
-  const method = $("#trpc").elements.method.value,
-    box = $("#trpc-fields");
-  box.replaceChildren();
-  for (const name of catalog.method_fields?.[method] || []) {
-    const input =
-      name === "address" && state.devices.length ? el("select") : el("input");
-    if (input.tagName === "SELECT")
-      choose(
-        input,
-        state.devices.map((d) => [
-          d.address,
-          (d.model || "Device") + " · " + d.address,
-        ]),
-      );
-    else {
-      input.type = "number";
-      input.step = 1;
-    }
-    input.dataset.field = name;
-    const l = el("label", tidy(name));
-    l.append(input);
-    box.append(l);
-  }
+  readTransaction = transactionEditors(
+    $("#trpc-fields"),
+    $("#trpc").elements.method.value,
+    catalog,
+    state.devices,
+  );
 }
 $("#trpc").elements.method.onchange = trpcFields;
 $("#trpc").onsubmit = (e) => {
   e.preventDefault();
   const f = e.target.elements;
-  try {
+  if (readTransaction)
     review({
       name: "trpc",
       apply: f.service.value === "update",
       values: {
         service: f.service.value,
         method: f.method.value,
-        fields: Object.fromEntries(
-          $$("[data-field]", e.target)
-            .filter((i) => i.value !== "")
-            .map((i) => [i.dataset.field, Number(i.value)]),
-        ),
+        fields: readTransaction(),
       },
     });
-  } catch (err) {
-    showResult(err.message);
-  }
 };
 $("#raw").onsubmit = (e) => {
   e.preventDefault();
-  const f = e.target.elements;
-  review({
-    name: "raw-send",
-    values: { port: Number(f.port.value), hex: f.hex.value },
-    apply: true,
-  });
+  if (readRaw)
+    review({
+      name: "raw-send",
+      apply: true,
+      values: { port: Number(e.target.elements.port.value), hex: readRaw() },
+    });
 };
 function commandHelp(peer) {
   const form = $("#catalog"),
-    c = catalog.commands.find((c) => c.name === form.elements.command.value),
-    box = $("#tool-fields");
-  box.replaceChildren();
+    c = catalog.commands.find((c) => c.name === form.elements.command.value);
   $("#tool-apply").hidden = !c?.can_apply;
-  for (const p of c?.parameters || []) {
-    const ctrl =
-      p.switch || (p.choices.length && !p.many && !p.repeat)
-        ? el("select")
-        : el("input");
-    if (p.switch)
-      choose(ctrl, [
-        ["", "Default"],
-        [p.flag, "On"],
-        ...(p.negative ? [[p.negative, "Off"]] : []),
-      ]);
-    else if (ctrl.tagName === "SELECT")
-      choose(ctrl, [
-        ...(!p.required ? [["", "Default"]] : []),
-        ...p.choices.map((v) => [v, tidy(v)]),
-      ]);
-    else {
-      ctrl.type = p.numeric && !p.many && !p.repeat ? "number" : "text";
-      ctrl.step = "any";
-    }
-    if (
-      peer &&
-      ["port", "subnet", "node"].includes(p.name) &&
-      peer[p.name] != null
-    )
-      ctrl.value = peer[p.name];
-    ctrl.required = !!p.required && !p.switch;
-    ctrl.dataset.param = p.name;
-    ctrl.title = p.help;
-    const l = el("label", tidy(p.name));
-    l.append(ctrl);
-    box.append(l);
-  }
+  readTool = c ? toolEditors($("#tool-fields"), c, catalog, peer) : null;
 }
 $("#catalog").elements.command.onchange = () => commandHelp();
 $("#catalog").onsubmit = (e) => {
   e.preventDefault();
-  const form = e.target,
-    c = catalog.commands.find((c) => c.name === form.elements.command.value),
-    args = [];
-  for (const p of c.parameters) {
-    const value = $('[data-param="' + p.name + '"]', form).value.trim();
-    if (!value) continue;
-    if (p.switch) {
-      args.push(value);
-      continue;
-    }
-    const vs = p.many || p.repeat ? value.split(/[ ,]+/) : [value];
-    if (p.repeat) {
-      for (const v of vs) args.push(p.flag, v);
-    } else {
-      if (p.flag) args.push(p.flag);
-      args.push(...vs);
-    }
+  if (!readTool) return;
+  try {
+    review({
+      name: e.target.elements.command.value,
+      args: readTool(),
+      apply: e.submitter?.value === "apply",
+    });
+  } catch (err) {
+    showResult(err.message);
   }
-  review({ name: c.name, args, apply: e.submitter.value === "apply" });
 };
 async function init() {
   connect();
@@ -1078,6 +1025,7 @@ async function init() {
       catalog.methods.map((m) => [m, tidy(m)]),
     );
     trpcFields();
+    readRaw = rawEditor($("#raw-fields"), catalog);
     function reasons() {
       const host = $("#read-error").elements.source.value === "5";
       choose(

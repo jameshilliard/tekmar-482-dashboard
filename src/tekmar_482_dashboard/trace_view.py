@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from tekmar_482 import (
+    ErrorReason,
+    ErrorSource,
     GatewayErrorCounter,
     NativeFrame,
     Packet,
@@ -21,6 +23,24 @@ def management_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
     method, service, body = message.method_id, message.service, message.extra
     if method not in BridgeMethod or service is None:
         return None
+    if method == BridgeMethod.TRAFFIC_COUNTS:
+        path = [(1, "Bus"), (1, "Subnet"), (1, "Node")]
+        totals = [(8, k) for k in ("RX valid", "TX ACK", "TX no ACK", "TX failed")]
+        if service is TrpcService.REQUEST:
+            return {0: [], 1: path[:1], 2: [(2, "Index")], 3: path}.get(len(body))
+        if service is TrpcService.RESPONSE_REQUEST:
+            return {
+                4: [(2, "Capacity"), (2, "Used")],
+                36: [*path, (1, "Present"), *totals],
+                37: [(2, "Index"), *path, *totals],
+                57: [
+                    *path[:1],
+                    *totals,
+                    (8, "RX invalid"),
+                    (8, "RX untracked"),
+                    (8, "TX unattributed"),
+                ],
+            }.get(len(body))
     if method == BridgeMethod.ERROR_REPORTING:
         if service is TrpcService.REQUEST and len(body) == 2:
             return [(1, "Source"), (1, "Reason")]
@@ -134,12 +154,24 @@ def trpc_quality(
         try:
             v = GatewayErrorCounter.decode(message.extra)
         except ProtocolError as err:
+            if len(message.extra) == 14:
+                source, reason = message.extra[:2]
+                if source not in ErrorSource:
+                    parts[2]["coverage"] = "unknown"
+                if reason not in ErrorReason or source in ErrorSource:
+                    parts[3]["coverage"] = "unknown"
+                return (
+                    "partial",
+                    "Unrecognized diagnostic source or reason",
+                    "Gateway diagnostic report",
+                )
             return "error", str(err), None
         notice = f"{v.source.name}: {v.reason.name.replace('_', ' ').lower()} (count {v.count})"
     if (
         message.method is TrpcMethod.NETWORK_ERROR
         and message.service is not TrpcService.REQUEST
         and (code := message.get("error"))
+        and code & 0xFF
     ):
         notice = f"Device-reported network fault {code:#06x}"
     spec = method_spec(message.method_id)
