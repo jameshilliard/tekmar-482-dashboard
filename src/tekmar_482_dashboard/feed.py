@@ -21,6 +21,8 @@ from tekmar_482 import (
 from tekmar_482._native_payloads.layouts import BLOCK_SELECTORS
 from tekmar_482.units import degh_to_fahrenheit
 
+from .wire_layout import Values
+
 Row = dict[str, Any]
 HISTORY = 1200
 WINDOW = 60
@@ -111,11 +113,12 @@ class Feed:
             "gap",
             "Capture gap",
             fields={"dropped": lost},
-            quality="error",
+            quality="info",
+            notice=f"Capture gap: {lost} records lost",
             reason=f"Host capture buffer dropped {lost} records",
         )
 
-    def observe(self, frame: NativeFrame) -> str:
+    def observe(self, frame: NativeFrame, decoded: Values) -> str:
         path = NativePath.from_frame(frame)
         key = f"{path.port}:{path.subnet:02X}:{path.node:02X}"
         changes = self.native.observe(frame)
@@ -135,9 +138,8 @@ class Feed:
             count=peer["count"] + 1,
             message=f"0x{frame.message_id:03X}",
         )
-        peer["values"][f"0x{frame.message_id:03X}"] = frame.decoded
+        peer["values"][f"0x{frame.message_id:03X}"] = decoded
         if frame.message.name == "BlockReport" and len(frame.message.payload) >= 3:
-            decoded = frame.decoded
             block = int.from_bytes(frame.message.payload[:2], "little")
             layout = BLOCK_SELECTORS.get(block)
             selector = decoded.get(layout[0]) if layout is not None else None
@@ -236,19 +238,19 @@ class Feed:
             "status": self.status,
             "ports": ports,
             "device_details": {
-                r["key"]: r
+                r["key"]: {
+                    k: r.get(k)
+                    for k in (
+                        "key",
+                        "address",
+                        "controls",
+                        "settings",
+                        "fan_step",
+                        "setback_events",
+                    )
+                }
                 for r in self.inventory.values()
                 if reset or r.get("updated_seq", 0) > (since or 0)
-            },
-            "source_details": {
-                p["key"]: p
-                for p in self.peers.values()
-                if (
-                    p.get("model")
-                    or p.get("family")
-                    or p.get("address") in self.inventory
-                )
-                and (reset or p.get("updated_seq", 0) > (since or 0))
             },
             "devices": [
                 {

@@ -1,12 +1,13 @@
 // Keep an immutable view of the buffer while the operator reads older traffic.
 // Rows are keyed by event object, not sequence: a restarted server can reuse IDs.
 export class TraceHistory {
-  constructor(scroller, button, drawRow, drawLatest) {
+  constructor(scroller, button, drawRow, drawLatest, refreshRow) {
     this.scroller = scroller;
     this.body = scroller.querySelector("tbody");
     this.button = button;
     this.drawRow = drawRow;
     this.drawLatest = drawLatest;
+    this.refreshRow = refreshRow;
     this.cache = new WeakMap();
     this.events = [];
     this.held = null;
@@ -19,6 +20,7 @@ export class TraceHistory {
 
   onScroll() {
     const box = this.scroller;
+    if (!box.getClientRects().length) return;
     if (box.scrollTop <= 1) {
       if (this.held) this.follow();
       return;
@@ -60,7 +62,7 @@ export class TraceHistory {
 
   draw(events) {
     this.drawn = events;
-    const newest = events.findLast((e) => e.hex);
+    const newest = events.at(-1);
     if (this.newest !== newest) {
       this.newest = newest;
       this.drawLatest(newest);
@@ -70,7 +72,7 @@ export class TraceHistory {
       if (this.body.querySelector(".empty")) return;
       const row = document.createElement("tr"),
         cell = row.insertCell();
-      cell.colSpan = 3;
+      cell.colSpan = this.scroller.querySelectorAll("th").length;
       cell.className = "empty";
       cell.textContent = "Waiting for matching messages";
       this.body.replaceChildren(row);
@@ -83,6 +85,7 @@ export class TraceHistory {
         row = this.drawRow(event);
         this.cache.set(event, row);
       }
+      if (!this.held) this.refreshRow(row, event);
       if (row === next) next = next.nextElementSibling;
       else this.body.insertBefore(row, next);
     }

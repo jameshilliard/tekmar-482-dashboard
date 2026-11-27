@@ -118,45 +118,84 @@
             <section class="trace-pane">
               <div class="section-head">
                 <h2><span class="live-dot"></span>Live trace</h2>
-                <button type="button" id="follow" disabled>
-                  Following live
-                </button>
-                <select id="layer" aria-label="Protocol layer">
-                  <option value="">All layers</option>
-                  <option value="tn4">tN4</option>
-                  <option value="trpc">tRPC</option>
-                  <option value="error">Errors</option>
-                  <option value="system">System</option>
-                </select>
+                <div
+                  class="trace-tabs"
+                  role="tablist"
+                  aria-label="Trace protocol"
+                >
+                  <button
+                    type="button"
+                    id="tab-tn4"
+                    role="tab"
+                    data-protocol="tn4"
+                    aria-controls="trace-tn4"
+                    aria-selected="true"
+                  >
+                    tN4
+                  </button>
+                  <button
+                    type="button"
+                    id="tab-trpc"
+                    role="tab"
+                    data-protocol="trpc"
+                    aria-controls="trace-trpc"
+                    aria-selected="false"
+                    tabindex="-1"
+                  >
+                    tRPC
+                  </button>
+                  <button
+                    type="button"
+                    id="tab-gateway"
+                    role="tab"
+                    data-protocol="gateway"
+                    aria-controls="trace-gateway"
+                    aria-selected="false"
+                    tabindex="-1"
+                  >
+                    Gateway
+                  </button>
+                </div>
+                <label class="device-filter"
+                  >End device
+                  <select
+                    id="endpoint-filter"
+                    aria-label="Filter trace by end device"
+                  >
+                    <option value="">All devices</option>
+                  </select></label
+                >
               </div>
-              <div class="trace-key">
-                <span class="good">✓ Decoded</span
-                ><span class="partial">? Partial</span
-                ><span class="error">× Error</span>
-              </div>
-              <div id="flow" class="flow" aria-label="Live message path"></div>
-              <div
-                id="live-bytes"
-                class="live-bytes"
-                aria-label="Latest frame with decoded bytes"
-              ></div>
-              <div
-                class="table-scroll trace-scroll"
-                tabindex="0"
-                role="region"
-                aria-label="Packet history"
-              >
-                <table class="trace-table">
-                  <thead>
-                    <tr>
-                      <th>Time / path</th>
-                      <th>Bus</th>
-                      <th>Message / decoded bytes</th>
-                    </tr>
-                  </thead>
-                  <tbody id="events"></tbody>
-                </table>
-              </div>
+              <div id="trace-panels"></div>
+              <template id="trace-panel">
+                <div class="trace-panel" role="tabpanel">
+                  <div class="trace-toolbar">
+                    <div class="trace-key" aria-label="Field coverage">
+                      <span class="good">✓ Decoded</span
+                      ><span class="partial">? Unmapped</span
+                      ><span class="error">× Invalid</span
+                      ><span class="unused-key">Reserved</span>
+                    </div>
+                    <div class="flow" aria-label="Live gateway activity"></div>
+                    <button type="button" class="follow" disabled>
+                      Following live
+                    </button>
+                  </div>
+                  <div
+                    class="table-scroll trace-scroll"
+                    tabindex="0"
+                    role="region"
+                  >
+                    <table class="trace-table">
+                      <colgroup></colgroup>
+                      <thead>
+                        <tr></tr>
+                      </thead>
+                      <tbody></tbody>
+                    </table>
+                  </div>
+                </div>
+              </template>
             </section>
             <section class="devices-pane">
               <div class="section-head">
@@ -218,19 +257,11 @@
             <h2>Error counters</h2>
             <span class="meta">Gateway lifetime totals</span>
           </div>
-          <div class="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Source</th>
-                  <th>Reason</th>
-                  <th>Count</th>
-                  <th>Last seen (ms)</th>
-                </tr>
-              </thead>
-              <tbody id="errors"></tbody>
-            </table>
-          </div>
+          <div
+            id="errors"
+            class="counter-groups"
+            aria-label="Counters by source"
+          ></div>
           <form id="read-error" class="work-form">
             <h2>Read a counter</h2>
             <div class="formrow">
@@ -248,55 +279,11 @@
             ><button data-operation="raw">Raw Send</button
             ><button data-operation="catalog">Client tools</button>
           </div>
-          <form id="climate" class="work-form">
+          <section id="climate" class="work-form">
             <h2>Thermostat controls</h2>
-            <div class="formrow">
-              <label>Bus<select name="port"></select></label
-              ><label>Subnet<input name="subnet" value="0" required /></label
-              ><label>Node<input name="node" value="1" required /></label>
-            </div>
-            <div class="formrow">
-              <label
-                >Parameter<select name="control">
-                  <option value="target">Stored target</option>
-                  <option value="mode">Operating mode</option>
-                </select></label
-              ><label data-target
-                >Target<select name="target">
-                  <option>heat</option>
-                  <option>cool</option>
-                  <option>floor</option>
-                  <option>fan</option>
-                  <option>humidify</option>
-                  <option>dehumidify</option>
-                </select></label
-              ><label data-target
-                >Period<select name="period">
-                  <option>occupied</option>
-                  <option>wake</option>
-                  <option>unoccupied</option>
-                  <option>sleep</option>
-                  <option>away</option>
-                </select></label
-              ><label data-target
-                ><span id="unit">Value (°C)</span
-                ><input name="value" type="number" step="any" /></label
-              ><label id="climate-mode" hidden
-                >Mode<select name="mode">
-                  <option>heat</option>
-                  <option>cool</option>
-                  <option>auto</option>
-                  <option>off</option>
-                  <option>vent</option>
-                  <option>emergency</option>
-                </select></label
-              >
-            </div>
-            <div class="commands">
-              <button value="preview">Preview</button
-              ><button value="apply" class="primary">Apply change</button>
-            </div>
-          </form>
+            <label>Device<select id="climate-device"></select></label>
+            <div id="climate-settings"></div>
+          </section>
           <form id="trpc" class="work-form" hidden>
             <h2>tRPC transaction</h2>
             <div class="formrow">
@@ -307,10 +294,8 @@
                 </select></label
               ><label>Method<select name="method"></select></label>
             </div>
-            <label
-              >Fields (JSON)<textarea name="fields" spellcheck="false">
-{}</textarea></label
-            ><button>Send transaction</button>
+            <div id="trpc-fields" class="formrow"></div>
+            <button>Send transaction</button>
           </form>
           <form id="raw" class="work-form" hidden>
             <h2>Raw tN4 transmission</h2>
@@ -326,15 +311,8 @@
           </form>
           <form id="catalog" class="work-form" hidden>
             <h2>Client operations</h2>
-            <label>Operation<select name="command"></select></label
-            ><label
-              >Arguments (JSON array)<textarea name="args" spellcheck="false">
-[]</textarea>
-            </label>
-            <details>
-              <summary>Command reference</summary>
-              <pre id="help"></pre>
-            </details>
+            <label>Operation<select name="command"></select></label>
+            <div id="tool-fields" class="formrow"></div>
             <div class="commands">
               <button value="preview">Run / preview</button
               ><button value="apply" id="tool-apply" class="primary">
@@ -355,7 +333,7 @@
               <i data-icon="x"></i>
             </button>
           </div>
-          <pre id="result" aria-live="polite"></pre>
+          <div id="result" aria-live="polite"></div>
         </section>
       </div>
       <footer>
@@ -402,7 +380,7 @@
           <i data-icon="x"></i>
         </button>
       </div>
-      <pre id="review"></pre>
+      <div id="review"></div>
       <div class="commands">
         <button data-close>Cancel</button
         ><button id="execute" class="primary">Confirm and run</button>

@@ -25,12 +25,21 @@ Normal mode displays inventory, reported settings, native traffic in both
 directions and tRPC traffic. All available diagnostic sources and Normal
 trace ports are selected by default. Raw mode defaults to passive capture
 without link acknowledgments. A native source address is not, on its own,
-a confirmed physical device or model.
+a confirmed physical device or model. In Normal mode, capable firmware
+can request a source's product identity without changing its settings.
 
-Mixed and Trace show a full-width packet history. Green marks decoded
-frames, yellow marks partial interpretations and red shows faults with
-their reasons. Scroll into history to hold your place while capture
-continues. Return to the top or select **Jump to live** to follow again.
+Mixed and Trace use separate tN4, tRPC and Gateway tabs with independent
+scroll positions. RX and TX are relative to the 482 on the selected link.
+Click an endpoint or use **End device** to filter by a source or explicit
+destination. A bus-wide broadcast is not attributed to individual devices.
+Open a device icon for its complete configuration and available controls.
+
+Protocol fields occupy fixed columns. Open a frame for one nested, wire-order
+diagram with escaped bytes, offsets and bit ranges. Green marks decoded data;
+amber hatching marks the specific unresolved bits or bytes. Red means invalid
+data, not a correctly decoded device fault, which gets a separate notice.
+Scroll into history to hold your place while capture continues, or select
+**Jump to live** to follow again.
 Host wire bytes are reconstructed from accepted TPCK frames; they are
 not a byte-for-byte recording of malformed UART traffic.
 

@@ -1,3 +1,6 @@
+import { wireDiagram } from "./wire.js";
+import { parameters } from "./parameters.js";
+
 const make = (tag, cls, text) => {
   const el = document.createElement(tag);
   if (cls) el.className = cls;
@@ -37,9 +40,16 @@ export function instrument(d) {
   );
   return art;
 }
-export function deviceCard(d, onClick) {
+export function deviceCard(d, onClick, summary = []) {
   const b = make("button", "device-card");
   b.type = "button";
+  b.setAttribute(
+    "aria-label",
+    "Open details for " +
+      (d.model ? "tekmar " + d.model : readable(d.family)) +
+      (d.address == null ? "" : " · " + d.address),
+  );
+  b.title = b.getAttribute("aria-label");
   const text = make("span", "device-text");
   text.append(
     make(
@@ -53,73 +63,60 @@ export function deviceCard(d, onClick) {
       d.family === "gateway"
         ? "Interface gateway"
         : (d.address != null ? "tHA " + d.address + " · " : "") +
-            (d.port == null ? "Inventory" : "Bus " + d.port),
+            (d.port == null ? "Inventory" : "Bus " + d.port) +
+            (d.node == null
+              ? ""
+              : " · " +
+                [d.subnet, d.node]
+                  .map((v) => v.toString(16).toUpperCase().padStart(2, "0"))
+                  .join(":")),
     ),
-    make(
-      "span",
-      "reading",
-      d.temperature_f != null
-        ? d.temperature_f.toFixed(1) + " °F"
-        : readable(d.family || "Unidentified"),
-    ),
+    make("span", "reading", readable(d.family || "Unidentified")),
   );
+  if (summary.length)
+    text.append(make("small", "device-summary", summary.join(" · ")));
   b.append(instrument(d), text);
   b.onclick = onClick;
   return b;
 }
+// Direction is relative to the 482 on the link shown in the active tab.
 const route = {
-  rx: "BUS → GW",
-  tx: "GW → BUS",
-  rx_invalid: "BUS → GW",
-  host_tx: "HOST → GW",
-  host_rx: "GW → HOST",
-  port_error: "GW → HOST",
-  report: "GW → HOST",
+  rx: "RX",
+  tx: "TX",
+  rx_invalid: "RX",
+  host_tx: "RX",
+  host_rx: "TX",
+  port_error: "TX",
+  report: "TX",
 };
 export function tracePath(e) {
-  return route[e.direction] || readable(e.direction).toUpperCase();
+  return route[e.direction] || "—";
 }
-function verdict(e) {
+export function verdict(e) {
   return (
     e.quality || (["system", "operator"].includes(e.layer) ? "info" : "partial")
   );
 }
-export function byteStrip(e) {
-  const row = make("div", "byte-strip");
-  const parts =
-    e.spans ||
-    ((e.hex || "").length
-      ? [
-          {
-            hex: e.hex
-              .match(/.{1,2}/g)
-              .join(" ")
-              .toUpperCase(),
-            label: e.reason || "Payload",
-            kind: "payload",
-          },
-        ]
-      : []);
-  for (const p of parts) {
-    const field = make("span", "byte-field " + p.kind);
-    field.append(make("code", "", p.hex), make("small", "", p.label));
-    row.append(field);
-  }
-  return row;
+export function badge(e) {
+  const grade = verdict(e);
+  const value =
+    {
+      good: "✓ Decoded",
+      partial: "? Partial",
+      error: "× Invalid",
+      info: "Info",
+    }[grade] || "? Partial";
+  const flag = make("span", "verdict " + grade, value);
+  flag.title = e.reason || grade;
+  return flag;
 }
-export function packet(e) {
+export function packet(e, inspect = false) {
   const grade = verdict(e),
     out = make("div", "packet " + grade),
     heading = make("div", "packet-title");
-  const symbol =
-    { good: "✓ Decoded", error: "× Error", partial: "? Partial", info: "Info" }[
-      grade
-    ] || "? Partial";
-  const flag = make("span", "verdict " + grade, symbol);
-  flag.title = grade + " · " + (e.reason || "");
   heading.append(
-    flag,
-    make("b", "", readable(e.name)),
+    badge(e),
+    ...(inspect ? [] : [make("b", "", readable(e.name))]),
     make(
       "small",
       "",
@@ -128,33 +125,28 @@ export function packet(e) {
         (e.ack === true ? " · ACK" : e.ack === false ? " · NO ACK" : ""),
     ),
   );
-  out.append(heading, byteStrip(e));
-  if (e.fields && Object.keys(e.fields).length) {
-    const grid = make("div", "decoded-grid");
-    for (const [k, v] of Object.entries(e.fields)) {
-      const pair = make("span", "decoded-pair");
-      pair.append(
-        make("span", "", readable(k) + "="),
-        make("b", "", physical(v)),
-      );
-      grid.append(pair);
-    }
-    out.append(grid);
-  }
+  out.append(heading);
+  if (e.notice) out.append(make("small", "reported-notice", e.notice));
+  if (e.layout) out.append(wireDiagram(e, inspect));
+  else if (e.fields && Object.keys(e.fields).length)
+    out.append(parameters(e.fields));
   if (grade === "error" || grade === "partial")
     out.append(
       make("small", "explanation", e.reason || "Unrecognized payload"),
     );
   return out;
 }
-export function live(e, flow, details) {
+export function live(e, flow) {
   if (!e) {
     flow.textContent = "Waiting for traffic";
-    details.replaceChildren();
     return;
   }
   const grade = verdict(e);
   flow.className = "flow " + grade;
+  if (!route[e.direction]) {
+    flow.replaceChildren(make("b", "flow-tag", e.name + " · #" + e.seq));
+    return;
+  }
   const bus = ["rx", "tx", "rx_invalid"].includes(e.direction),
     back = ["host_rx", "rx", "rx_invalid", "report", "port_error"].includes(
       e.direction,
@@ -171,25 +163,6 @@ export function live(e, flow, details) {
     make("span", "station central", "482 gateway"),
     line(bus),
     make("span", "station", e.port == null ? "tN4" : "Bus " + e.port),
-    make("b", "flow-tag", "LIVE · #" + e.seq),
-  );
-  details.replaceChildren(packet(e));
-}
-export function physical(value) {
-  if (value == null) return "Not reported";
-  if (typeof value !== "object") return readable(value);
-  if (value.fahrenheit != null && value.celsius != null)
-    return (
-      Number(value.fahrenheit).toFixed(1) +
-      " °F / " +
-      Number(value.celsius).toFixed(1) +
-      " °C"
-    );
-  if (value.name != null) return readable(value.name);
-  return (
-    Object.entries(value)
-      .filter(([, v]) => v != null)
-      .map(([k, v]) => readable(k) + ": " + physical(v))
-      .join(" · ") || "Not reported"
+    make("b", "flow-tag", tracePath(e) + " · #" + e.seq),
   );
 }

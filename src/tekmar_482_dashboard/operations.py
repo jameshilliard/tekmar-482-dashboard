@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 from io import StringIO
-from typing import Never
+from typing import Any, Never
 
 from tekmar_482 import GatewayEndpoint
 from tekmar_482.cli import build_parser, run
@@ -68,13 +68,38 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
     )
 
 
-def catalog(vendor: bool) -> list[dict[str, str | bool]]:
+def parameters(parser: argparse.ArgumentParser) -> list[dict[str, Any]]:
+    result = []
+    for action in parser._actions:
+        if any(opt in PROTECTED for opt in action.option_strings):
+            continue
+        result.append(
+            {
+                "name": action.dest,
+                "flag": next(iter(action.option_strings), None),
+                "negative": next(
+                    (o for o in action.option_strings if o.startswith("--no-")), None
+                ),
+                "required": action.required,
+                "choices": list(action.choices) if action.choices is not None else [],
+                "switch": action.nargs == 0,
+                "repeat": isinstance(action, argparse._AppendAction),
+                "many": action.nargs in {"+", "*"},
+                "numeric": action.type in {int, float}
+                or getattr(action.type, "__name__", "") in {"number", "_int_value"},
+                "help": action.help or "",
+            }
+        )
+    return result
+
+
+def catalog(vendor: bool) -> list[dict[str, Any]]:
     choices = parsers()
     return [
         {
             "name": name,
             "group": group,
-            "help": choices[name].format_help(),
+            "parameters": parameters(choices[name]),
             "can_apply": name in REQUIRES_CONFIRM,
         }
         for group, names in GROUPS.items()

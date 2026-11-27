@@ -17,8 +17,9 @@ from tekmar_482_dashboard.devices import Inventory, controls
 from tekmar_482_dashboard.feed import Feed
 from tekmar_482_dashboard.gateway import Gateway
 from tekmar_482_dashboard.main import operator_key
+from tekmar_482_dashboard.native_layout import native_spans
 from tekmar_482_dashboard.operations import arguments
-from tekmar_482_dashboard.trace_view import native_quality, native_spans, trpc_spans
+from tekmar_482_dashboard.trace_view import native_quality, trpc_spans
 
 ENDPOINT = GatewayEndpoint.tcp("192.0.2.1", 3001)
 
@@ -31,15 +32,18 @@ class FeedTests(unittest.TestCase):
             ("76f00601 00", "error"),
         ]:
             frame = NativeFrame(1, 20, bytes.fromhex(body))
+            fields = frame.decoded
+            header, payload = native_spans(frame, fields)
             self.assertEqual(
-                b"".join(bytes.fromhex(s["hex"]) for s in native_spans(frame)),
-                frame.body,
+                sum(s["size"] for g in (header, payload) for s in g["children"]),
+                len(frame.body),
             )
-            self.assertEqual(native_quality(frame)[0], quality)
-            self.assertTrue(native_quality(frame)[1])
+            verdict, reason = native_quality(frame, fields, payload)
+            self.assertEqual(verdict, quality)
+            self.assertTrue(reason)
         packet = Packet(6, bytes.fromhex("023701000001003406"))
         spans = trpc_spans(packet, TrpcPacket.from_packet(packet))
-        self.assertEqual(b"".join(bytes.fromhex(s["hex"]) for s in spans), packet.data)
+        self.assertEqual(sum(s["size"] for s in spans), len(packet.data))
         self.assertEqual(spans[2]["label"], "address: 1")
 
     def test_loss_and_device_metadata_are_distinct(self) -> None:
@@ -51,7 +55,7 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(state["ports"][4]["rx"], 7)
         self.assertEqual(feed.snapshot(6)["events"][0]["seq"], 7)
         frame = NativeFrame(1, 10, bytes.fromhex("76f00608 00032b0a06000000"))
-        key = feed.observe(frame)
+        key = feed.observe(frame, frame.decoded)
         self.assertIsNotNone(feed.peers[key]["temperature_f"])
         self.assertIsNone(feed.peers[key]["model"])
         feed.gap(2)

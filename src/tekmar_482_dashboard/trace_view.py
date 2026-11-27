@@ -7,13 +7,14 @@ from tekmar_482 import (
     NativeFrame,
     Packet,
     ProtocolError,
+    TrpcMethod,
     TrpcPacket,
     TrpcService,
 )
 from tekmar_482.management import BridgeMethod
 from tekmar_482.trpc import method_spec
 
-Span = dict[str, str]
+from .wire_layout import Span, Values, span
 
 
 def management_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
@@ -34,6 +35,11 @@ def management_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
             TrpcService.RESPONSE_UPDATE,
         }:
             return [(1, "Source mask")]
+    if method == BridgeMethod.NORMAL_IDENTITY and service in {
+        TrpcService.REQUEST,
+        TrpcService.RESPONSE_REQUEST,
+    }:
+        return [(1, "Bus"), (1, "Subnet"), (1, "Node")]
     if method == BridgeMethod.STATS:
         if service == TrpcService.REQUEST:
             return [(1, "Bus")]
@@ -72,8 +78,9 @@ def management_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
     return [] if not body else None
 
 
-def native_quality(frame: NativeFrame) -> tuple[str, str]:
-    meaning = frame.decoded
+def native_quality(
+    frame: NativeFrame, meaning: Values, payload: Span
+) -> tuple[str, str]:
     if "truncated" in meaning:
         return (
             "error",
@@ -88,31 +95,38 @@ def native_quality(frame: NativeFrame) -> tuple[str, str]:
         for k, v in meaning.items()
     ):
         return "partial", "Frame valid; contains extension, reserved or unresolved data"
-    if frame.message.name in {"BlockReport", "BlockUpdate"} and frame.message.payload:
-        return (
-            "partial",
-            "Block data shown as decoded; not all register meanings are verified",
-        )
-    if (
-        frame.message.name == "NetworkError"
-        and frame.message.payload
-        and frame.message.payload[0]
+    if payload.get("unknown_notes") or any(
+        p.get("coverage") == "unknown"
+        or any(b.get("coverage") == "unknown" for b in p.get("bits", []))
+        for p in payload.get("children", [])
     ):
         return (
-            "error",
-            f"Device-reported network fault 0x{frame.message.payload[0]:02X} (valid frame)",
+            "partial",
+            "Frame valid; some payload bytes do not have a verified field mapping",
         )
     return "good", "Valid frame and recognized payload"
 
 
-def trpc_quality(packet: Packet, message: TrpcPacket) -> tuple[str, str]:
+def trpc_quality(
+    packet: Packet, message: TrpcPacket, parts: list[Span]
+) -> tuple[str, str, str | None]:
+    notice = None
     if message.method_id == BridgeMethod.ERROR:
-        reason = message.extra[4:] if len(message.extra) >= 5 else b""
-        return "error", {
-            b"\x01": "Gateway busy",
-            b"\x02": "Invalid service or payload",
-            b"\x03": "Wrong gateway mode",
-        }.get(reason, "Unrecognized gateway rejection: " + reason.hex())
+        if len(message.extra) != 5:
+            return "error", "Invalid gateway rejection length", None
+        reason = message.extra[4]
+        notice = {
+            1: "Gateway busy",
+            2: "Gateway rejected service or payload",
+            3: "Wrong gateway mode",
+        }.get(reason)
+        if notice is None:
+            parts[-1]["coverage"] = "unknown"
+            return (
+                "partial",
+                "Unrecognized gateway rejection reason",
+                f"Gateway rejection: {reason:#04x}",
+            )
     if (
         message.method_id == BridgeMethod.ERROR_REPORTING
         and message.service_name == "Report"
@@ -120,82 +134,22 @@ def trpc_quality(packet: Packet, message: TrpcPacket) -> tuple[str, str]:
         try:
             v = GatewayErrorCounter.decode(message.extra)
         except ProtocolError as err:
-            return "error", str(err)
-        return (
-            "error",
-            f"{v.source.name}: {v.reason.name.replace('_', ' ').lower()} (lifetime count {v.count})",
-        )
+            return "error", str(err), None
+        notice = f"{v.source.name}: {v.reason.name.replace('_', ' ').lower()} (count {v.count})"
+    if (
+        message.method is TrpcMethod.NETWORK_ERROR
+        and message.service is not TrpcService.REQUEST
+        and (code := message.get("error"))
+    ):
+        notice = f"Device-reported network fault {code:#06x}"
     spec = method_spec(message.method_id)
     if message.service is None:
-        return "partial", f"Unknown tRPC service 0x{message.service_id:02X}"
+        return "partial", f"Unknown tRPC service 0x{message.service_id:02X}", notice
     if spec is not None and len(packet.data) == 5 + spec.size:
-        return "good", "Valid tRPC frame; all fields decoded"
-    layout = management_fields(message)
-    if layout is not None and sum(n for n, _ in layout) == len(message.extra):
-        return "good", "Recognized management fields"
-    return "partial", "Valid tRPC frame; payload not fully interpreted"
-
-
-def span(raw: bytes, label: str, kind: str) -> Span:
-    return {"hex": raw.hex(" ").upper(), "label": label, "kind": kind}
-
-
-def native_spans(frame: NativeFrame) -> list[Span]:
-    msg, body, f = frame.message, frame.message.payload, frame.decoded
-    result = [
-        span(
-            frame.body[:4],
-            f"ID {frame.message_id:03X} · P{msg.priority} · {frame.subnet:02X}:{frame.node:02X} · {len(body)}B",
-            "header",
-        )
-    ]
-    parts: list[tuple[int, str]] = []
-    if msg.name == "AirGroupMemberStatus" and len(body) >= 8:
-        parts = [
-            (1, f"Group {f.get('air_group_id', '?')}"),
-            (1, str(f.get("schedule_name", "Air flags"))),
-            (1, f"Target {f.get('target_f', '?')} °F"),
-            (2, f"Air {f.get('temperature_f', '?')} °F"),
-            (1, "Outputs"),
-            (2, "Remote sensor"),
-        ]
-    elif msg.name == "BlockReport" and len(body) >= 3:
-        parts = [
-            (2, f"Block {int.from_bytes(body[:2], 'little'):#04x}"),
-            (1, f"Support {body[2]:08b}"),
-        ]
-    elif msg.name == "BlockRequest" and len(body) >= 7:
-        parts = [
-            (2, f"Block {int.from_bytes(body[:2], 'little'):#04x}"),
-            (1, f"Subnet {body[2]:02X}"),
-            (4, "Node mask"),
-        ]
-    elif msg.name == "BlockUpdate" and len(body) >= 4:
-        parts = [
-            (1, f"Subnet {body[0]:02X}"),
-            (1, f"Node {body[1] & 31}"),
-            (2, f"Block {int.from_bytes(body[2:4], 'little'):#04x}"),
-        ]
-    elif msg.name == "NetworkError" and len(body) >= 2:
-        parts = [
-            (1, f"Error {body[0]:02X}"),
-            (1, f"Priority {body[1] >> 6} · ID {body[1] & 63}"),
-        ]
-    offset = 0
-    for width, label in parts:
-        result.append(span(body[offset : offset + width], label, "field"))
-        offset += width
-    if body[offset:]:
-        summary = (
-            " · ".join(
-                f"{k.replace('_', ' ')}: {v}"
-                for k, v in f.items()
-                if not k.endswith("_raw")
-            )
-            or "Native payload"
-        )
-        result.append(span(body[offset:], summary, "payload"))
-    return result
+        return "good", "Valid tRPC frame; all fields decoded", notice
+    if message.method_id in BridgeMethod and all(p["kind"] != "unknown" for p in parts):
+        return "good", "Recognized management fields", notice
+    return "partial", "Valid tRPC frame; payload not fully interpreted", notice
 
 
 def trpc_spans(packet: Packet, message: TrpcPacket) -> list[Span]:
@@ -209,6 +163,10 @@ def trpc_spans(packet: Packet, message: TrpcPacket) -> list[Span]:
         span(raw[:1], message.service_name or "Service", "service"),
         span(raw[1:5], name, "header"),
     ]
+    if message.service is None:
+        result[0]["coverage"] = "unknown"
+    if message.method_name is None and message.method_id not in BridgeMethod:
+        result[1]["coverage"] = "unknown"
     offset = 5
     spec = method_spec(message.method_id)
     if spec:
@@ -237,7 +195,7 @@ def trpc_spans(packet: Packet, message: TrpcPacket) -> list[Span]:
             span(
                 raw[offset:],
                 "Extension payload" if not spec else "Extra or partial field",
-                "payload",
+                "unknown",
             )
         )
     return result

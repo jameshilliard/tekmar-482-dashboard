@@ -1,12 +1,6 @@
-import {
-  deviceCard,
-  instrument,
-  tracePath,
-  packet,
-  live,
-  physical,
-} from "./instruments.js";
-import { TraceHistory } from "./history.js";
+import { parameters as facts, thermostatSummary } from "./parameters.js";
+import { deviceCard, instrument, tracePath, packet } from "./instruments.js";
+import { TraceTabs } from "./traces.js";
 const $ = (q, root = document) => root.querySelector(q);
 const $$ = (q, root = document) => [...root.querySelectorAll(q)];
 const el = (tag, text, cls) => {
@@ -26,7 +20,7 @@ const number = (n) => new Intl.NumberFormat().format(n);
 const stamp = (n) =>
   new Date(n * 1000).toLocaleTimeString(undefined, { hour12: false });
 const hex = (n) => "0x" + Number(n).toString(16).toUpperCase().padStart(2, "0");
-const pretty = (obj) => JSON.stringify(obj, null, 2);
+
 const choose = (select, items) =>
   select.replaceChildren(
     ...items.map(([value, label]) => new Option(label, value)),
@@ -40,7 +34,6 @@ const btn = (title, fn) => {
 const tidy = (s) => String(s ?? "").replaceAll("_", " ");
 const state = {
   device_details: {},
-  source_details: {},
   events: [],
   ports: [],
   peers: [],
@@ -132,43 +125,23 @@ $$("button[data-view]").forEach(
 $$("[data-operation]").forEach(
   (b) => (b.onclick = () => selectOperation(b.dataset.operation)),
 );
-const match = (item, f) => {
+const match = (item, f, scoped = true) => {
   return (
-    (portFilter === null || item.port === portFilter) &&
-    (!filterPeer || item.key === filterPeer || item.peer === filterPeer) &&
+    (!scoped || portFilter === null || item.port === portFilter) &&
+    (!scoped ||
+      !filterPeer ||
+      item.key === filterPeer ||
+      item.peer === filterPeer) &&
     (!f || JSON.stringify(item).toLowerCase().includes(f))
   );
 };
 function displayedEvents() {
-  const search = $("#search").value.trim().toLowerCase(),
-    layer = $("#layer").value;
+  const search = $("#search").value.trim().toLowerCase();
   return shown.events.filter(
-    (e) => match(e, search) && (!layer || e.layer === layer),
+    (e) => traceTabs.matches(e) && match(e, search, traceTabs.active === "tn4"),
   );
 }
-const historyView = new TraceHistory(
-  $(".trace-scroll"),
-  $("#follow"),
-  (e) => {
-    const row = el("tr"),
-      time = row.insertCell();
-    row.dataset.seq = e.seq;
-    time.className = "mono";
-    time.append(
-      document.createTextNode(stamp(e.at)),
-      el("small", tracePath(e), "path"),
-    );
-    row.insertCell().textContent = e.port ?? "–";
-    row.insertCell().append(packet(e));
-    row.tabIndex = 0;
-    row.onclick = () => eventDetails(e);
-    row.onkeydown = (key) => {
-      if (key.key === "Enter") eventDetails(e);
-    };
-    return row;
-  },
-  (e) => live(e, $("#flow"), $("#live-bytes")),
-);
+const traceTabs = new TraceTabs($(".trace-pane"), eventDetails, render);
 function spark(canvas, activity) {
   const w = 180,
     h = 34,
@@ -236,6 +209,10 @@ function render() {
     renderDiagnostics();
     return;
   }
+  if (page === "operations") {
+    if (catalog.modes) climateDevices();
+    return;
+  }
   if (page !== "monitor") return;
   $("#devices-n").textContent = number(shown.peers.length);
   $("#rx-n").textContent = number(shown.ports.reduce((s, p) => s + p.rx, 0));
@@ -263,16 +240,23 @@ function render() {
     $(".state", b).textContent = p.activity.some(Boolean) ? "Active" : "Quiet";
     spark($("canvas", b), p.activity);
   }
-  if (view !== "devices")
-    historyView.update(
+  if (view !== "devices") {
+    traceTabs.inventory(shown.devices, shown.peers);
+    if (
+      !traceTabs.chosen &&
+      st.firmware === "Stock" &&
+      traceTabs.active !== "trpc"
+    )
+      traceTabs.select("trpc", false);
+    traceTabs.update(
       displayedEvents(),
       JSON.stringify([
-        portFilter,
-        filterPeer,
+        traceTabs.active === "tn4" ? [portFilter, filterPeer] : null,
         $("#search").value,
-        $("#layer").value,
+        traceTabs.devices.select.value,
       ]),
     );
+  }
   if (view === "trace") return;
   const search = $("#search").value.trim().toLowerCase();
   const peers = shown.peers
@@ -334,120 +318,68 @@ function showCards(peers) {
   );
   const box = $("#device-cards"),
     present = new Set();
-  function append(d, groups, open) {
+  function append(d, summary, open) {
     present.add(d.key);
-    const signature = JSON.stringify([d.model, d.temperature_f, groups]);
-    let view = deviceViews.get(d.key);
-    if (!view) {
-      view = { node: el("article", null, "device-record") };
-      view.node.dataset.device = d.key;
-      deviceViews.set(d.key, view);
-      box.append(view.node);
-    }
-    if (view.signature === signature) return;
-    view.signature = signature;
-    view.node.replaceChildren(deviceCard(d, open));
-    for (const [name, values] of groups) {
-      if (!values || !Object.keys(values).length) continue;
-      view.node.append(
-        el("h3", name),
-        facts(
-          Object.fromEntries(
-            Object.entries(values)
-              .filter(([, v]) => v != null)
-              .map(([k, v]) => [k, physical(v)]),
-          ),
-        ),
-      );
-    }
+    const sig = JSON.stringify([
+      d.model,
+      d.family,
+      d.address,
+      d.port,
+      d.node,
+      d.subnet,
+      d.temperature_f,
+      summary,
+    ]);
+    const old = deviceViews.get(d.key);
+    if (old?.sig === sig) return;
+    const node = old?.node || el("article", null, "device-record");
+    node.dataset.device = d.key;
+    node.replaceChildren(deviceCard(d, open, summary));
+    if (!old) box.append(node);
+    deviceViews.set(d.key, { node, sig });
   }
   if (portFilter === null && !filterPeer && !$("#search").value) {
-    const s = shown.status;
+    const status = shown.status;
     append(
       { key: "gateway", model: "482", family: "gateway" },
-      [
-        [
-          "Gateway",
-          {
-            firmware: s.firmware,
-            revision: s.revision,
-            transport: s.transport,
-            baudrate: s.baudrate,
-            mode: s.mode,
-            features: s.features,
-            trace_ports: s.trace_ports,
-            error_sources: s.error_sources,
-            panel: s.panel,
-          },
-        ],
-      ],
-      () => setPage("diagnostics"),
+      [status.mode, status.connection].filter(Boolean),
+      () => {
+        const s = shown.status;
+        openDetail("tekmar 482 · Gateway", [
+          el("h3", "Gateway configuration"),
+          facts(s),
+          btn("Open diagnostics", () => {
+            $("#detail").close();
+            setPage("diagnostics");
+          }),
+        ]);
+      },
     );
   }
-  function nativeGroups(p) {
-    if (!p) return [];
-    const { identity, blocks, values, ...rest } = p;
-    return [
-      ["Identification", identity],
-      ["Native configuration", blocks],
-      [
-        "Native status",
-        Object.fromEntries(
-          [
-            "climate",
-            "snowmelt",
-            "fault",
-            "line",
-            "water",
-            "setpoint",
-            "io",
-            "plant",
-            "schedule",
-          ]
-            .filter((k) => rest[k] != null && Object.keys(rest[k]).length)
-            .map((k) => [k, rest[k]]),
-        ),
-      ],
-      ["Observed message fields", values],
-    ];
+  function matchesDevice(p, d) {
+    return (
+      p.node != null &&
+      p.port === d.port &&
+      p.address === d.address &&
+      p.model != null &&
+      p.model === d.model
+    );
   }
   for (const d of devices) {
-    const r = shown.device_details[d.key] || {};
+    const r = shown.device_details[d.key],
+      p = peers.find((p) => matchesDevice(p, d));
     append(
-      d,
-      [
-        ["Reported settings", r.settings],
-        ["Device metadata", r.metadata],
-        ["Reported capabilities", r.capabilities],
-        [
-          "Controls",
-          {
-            writable: r.controls,
-            fan_step_percent: r.controls?.includes("fan") ? r.fan_step : null,
-          },
-        ],
-        ["Raw setting values", r.raw_settings],
-        ...peers
-          .filter(
-            (p) =>
-              p.node != null &&
-              p.address === d.address &&
-              !p.model &&
-              !p.family,
-          )
-          .flatMap((p) =>
-            nativeGroups(shown.source_details[p.key]).map(([name, vals]) => [
-              name + " · source " + p.key,
-              vals,
-            ]),
-          ),
-      ],
+      { ...d, temperature_f: d.temperature_f ?? p?.temperature_f },
+      thermostatSummary(r?.settings, p),
       () => deviceDetails(d.address),
     );
   }
   for (const p of peers) {
-    if (!p.model && !p.family) continue;
-    append(p, nativeGroups(shown.source_details[p.key]), () => peerDetails(p));
+    if ((!p.model && !p.family) || devices.some((d) => matchesDevice(p, d)))
+      continue;
+    append(p, thermostatSummary({}, p), () =>
+      peerDetails(shown.peers.find((row) => row.key === p.key) || p),
+    );
   }
   for (const [key, view] of deviceViews)
     if (!present.has(key)) {
@@ -472,13 +404,16 @@ async function deviceDetails(address) {
         setback_events: d.setback_events,
       }),
     );
-    const config = Object.fromEntries(
-      Object.entries(d.settings || {})
-        .filter(([, v]) => v != null)
-        .map(([k, v]) => [k, physical(v)]),
-    );
+    const config = d.settings || {};
     const body = [
       intro,
+      btn("Filter trace", () => {
+        $("#detail").close();
+        traceTabs.inventory(shown.devices, shown.peers);
+        traceTabs.devices.set(d.key, false);
+        traceTabs.select("trpc");
+        setView("trace");
+      }),
       el("h3", "Reported configuration"),
       Object.keys(config).length
         ? facts(config)
@@ -486,12 +421,17 @@ async function deviceDetails(address) {
     ];
     if (d.controls.length) body.push(settingForm(d));
     else body.push(el("p", "No writable tRPC settings reported.", "meta"));
+    for (const [label, values] of [
+      ["Device metadata", d.metadata],
+      ["Reported capabilities", d.capabilities],
+      ["Raw setting values", d.raw_settings],
+    ]) {
+      if (values && Object.keys(values).length)
+        body.push(el("h3", label), facts(values));
+    }
     for (const p of d.native_sources || []) {
-      const group = el("details");
-      group.append(
-        el("summary", "Native configuration · " + p.key),
-        el("pre", pretty(p)),
-      );
+      const group = el("section");
+      group.append(el("h3", "Native configuration · " + p.key), facts(p));
       body.push(group);
     }
     openDetail(
@@ -503,19 +443,17 @@ async function deviceDetails(address) {
   }
 }
 function settingForm(d) {
-  const form = el("form", null, "work-form");
-  form.append(el("h3", "Device settings"));
-  const fields = el("div", null, "formrow"),
-    setting = el("select"),
-    slot = el("select"),
-    entry = el("input"),
-    mode = el("select"),
-    unit = el("span");
-  const label = (title, input) => {
-    const l = el("label", title);
+  const form = el("form", null, "work-form"),
+    fields = el("div", null, "formrow");
+  const label = (text, input) => {
+    const l = el("label", text);
     l.append(input);
     return l;
   };
+  const setting = el("select"),
+    slot = el("select"),
+    mode = el("select"),
+    display = el("output");
   choose(
     setting,
     d.controls.map((k) => [k, tidy(k)]),
@@ -529,37 +467,92 @@ function settingForm(d) {
     Object.entries(catalog.setbacks)
       .filter(
         ([k]) =>
-          k === "CURRENT" ||
-          k === "AWAY" ||
-          (d.setback_events && k.endsWith("_" + d.setback_events)),
+          k === "CURRENT" || k === "AWAY" || k.endsWith("_" + d.setback_events),
       )
       .map(([k, v]) => [v, tidy(k)]),
   );
   slot.value = catalog.setbacks.CURRENT;
-  entry.type = "number";
-  entry.step = "any";
-  const vl = label("", entry),
+  const target = el("div", null, "stepper"),
+    down = btn("", () => adjust(-1)),
+    up = btn("", () => adjust(1)),
+    apply = el("button", "Review change", "primary");
+  for (const [b, n] of [
+    [down, "Decrease"],
+    [up, "Increase"],
+  ]) {
+    b.title = n;
+    b.ariaLabel = n;
+    b.append(icon("chevron-right"));
+    b.className = n.toLowerCase();
+  }
+  display.setAttribute("aria-live", "polite");
+  target.append(down, display, up);
+  const sl = label("Setback", slot),
     ml = label("Mode", mode),
-    sl = label("Setback", slot);
-  vl.prepend(unit);
-  function change() {
-    const s = setting.value;
+    vl = el("div", null, "step-field"),
+    caption = el("span");
+  vl.append(caption, target);
+  let value, base, step, temperature;
+  function update() {
+    display.textContent =
+      value == null ? "Not reported" : value + (temperature ? " °C" : " %");
+    apply.disabled =
+      setting.value === "mode"
+        ? !mode.value || mode.value === base
+        : value == null || value === base;
+  }
+  function reset() {
+    const s = setting.value,
+      tag = slot.selectedOptions[0]?.textContent
+        .replaceAll(" ", "_")
+        .toLowerCase();
+    const k = {
+      heat: "heat_setpoints",
+      cool: "cool_setpoints",
+      floor: "slab_setpoints",
+      target: "setpoint_targets",
+      fan: "fan_percent",
+      humidity_min: "humidity_setpoint_min",
+      humidity_max: "humidity_setpoint_max",
+    }[s];
+    const cell = d.settings?.[k],
+      reading = s.startsWith("humidity") ? cell : cell?.[tag];
+    temperature = ["heat", "cool", "floor", "target"].includes(s);
     vl.hidden = s === "mode";
     ml.hidden = s !== "mode";
     sl.hidden = s === "mode" || s.startsWith("humidity");
-    entry.required = s !== "mode";
-    unit.textContent = ["heat", "cool", "floor", "target"].includes(s)
-      ? "Target (°C)"
-      : "Value (%)";
-    entry.step =
-      s === "fan" ? d.fan_step : s.startsWith("humidity") ? 1 : "any";
+    caption.textContent = temperature ? "Target" : "Percentage";
+    step = temperature
+      ? s === "target"
+        ? 0.1
+        : 0.5
+      : s === "fan"
+        ? d.fan_step || 1
+        : 1;
+    value =
+      reading?.celsius ??
+      reading?.percent ??
+      (typeof reading === "number" ? reading : null);
+    base = s === "mode" ? d.settings?.mode_setting?.name?.toUpperCase() : value;
+    if (s === "mode") mode.value = base || "";
+    update();
   }
-  fields.append(label("Setting", setting), vl, ml, sl);
-  form.append(fields, el("button", "Review change", "primary"));
-  setting.onchange = change;
-  change();
+  function adjust(dir) {
+    const start =
+      value ??
+      (temperature ? (d.settings?.current_temperature?.celsius ?? 20) : 0);
+    value = Math.round((start + dir * step) * 10) / 10;
+    if (!temperature) value = Math.min(100, Math.max(0, value));
+    update();
+  }
+  setting.onchange = slot.onchange = reset;
+  mode.onchange = update;
+  fields.append(label("Setting", setting), sl, vl, ml);
+  form.append(fields, apply);
+  reset();
   form.onsubmit = (e) => {
     e.preventDefault();
+    if (apply.disabled) return;
     $("#detail").close();
     review({
       name: "device-setting",
@@ -568,55 +561,56 @@ function settingForm(d) {
         address: d.address,
         setting: setting.value,
         setback: Number(slot.value),
-        value: setting.value === "mode" ? mode.value : Number(entry.value),
+        value: setting.value === "mode" ? mode.value : value,
       },
     });
   };
   return form;
 }
 $("#refresh-devices").onclick = () => review({ name: "inventory-read" });
+function climateDevices() {
+  const select = $("#climate-device"),
+    ds = state.devices.filter((d) => d.controls?.length);
+  const sig = ds.map((d) => [d.key, d.model]).join("|");
+  if (select.dataset.items === sig) return;
+  const old = select.value;
+  choose(
+    select,
+    ds.map((d) => [
+      d.key,
+      "tekmar " + (d.model || "device") + " · " + d.address,
+    ]),
+  );
+  if (ds.some((d) => d.key === old)) select.value = old;
+  select.dataset.items = sig;
+  select.onchange();
+}
+$("#climate-device").onchange = () => {
+  const d = state.device_details[$("#climate-device").value];
+  $("#climate-settings").replaceChildren(
+    d
+      ? settingForm(d)
+      : el("p", "No controllable devices in this inventory.", "meta"),
+  );
+};
 function openDetail(title, body) {
   $("#detail-title").textContent = title;
   $("#detail-body").replaceChildren(...body);
   if (!$("#detail").open) $("#detail").showModal();
 }
 function eventDetails(e) {
-  const nodes = [
-    el(
-      "p",
-      stamp(e.at) + " · " + e.layer + " / " + e.direction + " · #" + e.seq,
-      "meta",
-    ),
+  const info = ["#" + e.seq, stamp(e.at), "482 " + tracePath(e)];
+  if (e.port != null) info.push("Bus " + e.port);
+  if (e.host_monotonic_ns != null)
+    info.push("Host clock " + e.host_monotonic_ns + " ns");
+  const endpoints = el("div", null, "frame-endpoints");
+  traceTabs.devices.fill(endpoints, e);
+  const body = [
+    el("p", info.join(" · "), "capture-line"),
+    endpoints,
+    packet(e, true),
   ];
-  if (e.hex) {
-    nodes.push(
-      el("h3", "Wire payload"),
-      el("pre", (e.hex.match(/.{1,2}/g) || []).join(" ").toUpperCase()),
-    );
-  }
-  if (e.fields && Object.keys(e.fields).length) {
-    nodes.push(el("h3", "Decoded fields"), facts(e.fields));
-  }
-  const full = el("details");
-  full.append(el("summary", "Complete record"), el("pre", pretty(e)));
-  nodes.push(full);
-  openDetail(e.name, nodes);
-}
-function facts(values) {
-  const list = el("dl", null, "facts");
-  for (const [label, value] of Object.entries(values))
-    list.append(
-      el("dt", tidy(label)),
-      el(
-        "dd",
-        value == null
-          ? "—"
-          : typeof value === "object"
-            ? pretty(value)
-            : String(value),
-      ),
-    );
-  return list;
+  openDetail(e.name, body);
 }
 async function peerDetails(p) {
   try {
@@ -629,30 +623,26 @@ async function peerDetails(p) {
         filterPeer = p.key;
         portFilter = null;
         $("#detail").close();
+        traceTabs.select(p.node == null ? "trpc" : "tn4");
         setView("mixed");
       }),
       btn("Device controls", () => {
         $("#detail").close();
         setPage("operations");
-        if (p.port == null) {
-          selectOperation("trpc");
-          $("#trpc").elements.fields.value = JSON.stringify({
-            address: p.address,
-          });
-          return;
+        if (state.device_details["tha:" + p.address]?.controls?.length) {
+          selectOperation("climate");
+          climateDevices();
+          $("#climate-device").value = "tha:" + p.address;
+          $("#climate-device").onchange();
+        } else {
+          selectOperation("catalog");
+          $("#catalog").elements.command.value = "read-device";
+          commandHelp(p);
         }
-        const f = $("#climate");
-        f.elements.port.value = p.port;
-        f.elements.subnet.value = hex(p.subnet);
-        f.elements.node.value = p.node;
-        selectOperation("climate");
       }),
     );
-    const full = el("details");
-    full.append(
-      el("summary", "Decoded device data"),
-      el("pre", pretty(record)),
-    );
+    const full = el("section");
+    full.append(el("h3", "Decoded device data"), facts(record));
     openDetail(p.model ? "tekmar " + p.model : "Network source " + p.key, [
       facts({
         bus: p.port,
@@ -711,12 +701,38 @@ function renderDiagnostics() {
       Number(BigInt(b.count) > 0n) - Number(BigInt(a.count) > 0n) ||
       b.last_seen_ms - a.last_seen_ms,
   );
-  rows($("#errors"), counters, "No counters received", 4, (e) => [
-    tidy(e.source),
-    tidy(e.reason),
-    e.count,
-    e.last_seen_ms,
-  ]);
+  const groups = $("#errors");
+  for (const source of [
+    "gateway",
+    ...Array.from({ length: 5 }, (_, p) => "port_" + p),
+  ]) {
+    let group = groups.querySelector("[data-source=" + source + "]");
+    if (!group) {
+      group = el("section", null, "counter-group");
+      group.dataset.source = source;
+      const title = el(
+        "h3",
+        source === "gateway" ? "Gateway / UART" : "tN4 bus " + source.slice(-1),
+      );
+      const table = el("table"),
+        heading = table.createTHead().insertRow();
+      for (const label of ["Reason", "Count", "Last seen (ms)"])
+        heading.append(el("th", label));
+      table.createTBody();
+      group.append(title, table);
+      groups.append(group);
+    }
+    const items = counters.filter((item) => item.source === source);
+    const signature = JSON.stringify(items);
+    if (signature !== group.dataset.signature) {
+      rows($("tbody", group), items, "Not reported", 3, (e) => [
+        tidy(e.reason),
+        e.count,
+        e.count === "0" ? "–" : e.last_seen_ms,
+      ]);
+      group.dataset.signature = signature;
+    }
+  }
 }
 function connect() {
   const ws = new WebSocket(
@@ -746,7 +762,6 @@ function connect() {
     Object.assign(state, m, {
       events,
       device_details: patch("device_details", m.devices),
-      source_details: patch("source_details", m.peers),
     });
     if (!paused) render();
   };
@@ -766,7 +781,6 @@ $("#pause").onclick = () => {
   render();
 };
 $("#search").oninput = render;
-$("#layer").onchange = render;
 $("#export").onclick = () => {
   const blob = new Blob(
     [
@@ -802,7 +816,11 @@ async function post(url, body, k = key) {
   });
   const v = await r.json();
   if (!r.ok)
-    throw Error(typeof v.detail === "string" ? v.detail : pretty(v.detail));
+    throw Error(
+      Array.isArray(v.detail)
+        ? v.detail.map((error) => error.msg).join("; ")
+        : String(v.detail || "Operation failed"),
+    );
   return v;
 }
 $("#auth-form").onsubmit = async (e) => {
@@ -821,8 +839,22 @@ $("#auth-form").onsubmit = async (e) => {
 };
 function showResult(output) {
   $("#output").hidden = false;
-  $("#result").textContent =
-    typeof output === "string" ? output : pretty(output);
+  if (typeof output === "string") {
+    try {
+      output = JSON.parse(output);
+    } catch {
+      try {
+        output = output.split("\n").map((s) => JSON.parse(s));
+      } catch {
+        /* Plain text. */
+      }
+    }
+  }
+  $("#result").replaceChildren(
+    typeof output === "object" && output !== null
+      ? facts(output)
+      : el("p", String(output)),
+  );
 }
 $("#dismiss-output").onclick = () => ($("#output").hidden = true);
 function review(payload) {
@@ -835,7 +867,13 @@ function review(payload) {
     return;
   }
   pending = { ...payload, confirmed: true };
-  $("#review").textContent = pretty(payload);
+  $("#review").replaceChildren(
+    facts({
+      operation: payload.name,
+      ...payload.values,
+      ...(payload.args?.length ? { arguments: payload.args.join(" ") } : {}),
+    }),
+  );
   $("#confirm").showModal();
 }
 $("#execute").onclick = async () => {
@@ -882,38 +920,32 @@ $("#read-error").onsubmit = (e) => {
     values: { source: Number(f.source.value), reason: f.reason.value },
   });
 };
-$("#climate").onsubmit = (e) => {
-  e.preventDefault();
-  const f = e.target.elements,
-    target = f.control.value === "target";
-  const apply = e.submitter.value === "apply";
-  if (target && !f.value.value) {
-    showResult("Enter a target value.");
-    return;
+function trpcFields() {
+  const method = $("#trpc").elements.method.value,
+    box = $("#trpc-fields");
+  box.replaceChildren();
+  for (const name of catalog.method_fields?.[method] || []) {
+    const input =
+      name === "address" && state.devices.length ? el("select") : el("input");
+    if (input.tagName === "SELECT")
+      choose(
+        input,
+        state.devices.map((d) => [
+          d.address,
+          (d.model || "Device") + " · " + d.address,
+        ]),
+      );
+    else {
+      input.type = "number";
+      input.step = 1;
+    }
+    input.dataset.field = name;
+    const l = el("label", tidy(name));
+    l.append(input);
+    box.append(l);
   }
-  review({
-    name: target ? "set-thermostat-target" : "set-climate-mode",
-    args: [
-      f.port.value,
-      f.subnet.value,
-      f.node.value,
-      ...(target
-        ? [f.target.value, f.period.value, f.value.value]
-        : [f.mode.value]),
-    ],
-    apply,
-  });
-};
-$("#climate").onchange = (e) => {
-  const f = e.currentTarget.elements;
-  $$("[data-target]").forEach((x) => (x.hidden = f.control.value !== "target"));
-  $("#climate-mode").hidden = f.control.value === "target";
-  $("#unit").textContent = ["fan", "humidify", "dehumidify"].includes(
-    f.target.value,
-  )
-    ? "Value (%)"
-    : "Value (°C)";
-};
+}
+$("#trpc").elements.method.onchange = trpcFields;
 $("#trpc").onsubmit = (e) => {
   e.preventDefault();
   const f = e.target.elements;
@@ -924,7 +956,11 @@ $("#trpc").onsubmit = (e) => {
       values: {
         service: f.service.value,
         method: f.method.value,
-        fields: JSON.parse(f.fields.value),
+        fields: Object.fromEntries(
+          $$("[data-field]", e.target)
+            .filter((i) => i.value !== "")
+            .map((i) => [i.dataset.field, Number(i.value)]),
+        ),
       },
     });
   } catch (err) {
@@ -940,29 +976,68 @@ $("#raw").onsubmit = (e) => {
     apply: true,
   });
 };
-function commandHelp() {
-  const c = catalog.commands.find(
-    (c) => c.name === $("#catalog").elements.command.value,
-  );
-  $("#help").textContent = c?.help || "";
+function commandHelp(peer) {
+  const form = $("#catalog"),
+    c = catalog.commands.find((c) => c.name === form.elements.command.value),
+    box = $("#tool-fields");
+  box.replaceChildren();
   $("#tool-apply").hidden = !c?.can_apply;
+  for (const p of c?.parameters || []) {
+    const ctrl =
+      p.switch || (p.choices.length && !p.many && !p.repeat)
+        ? el("select")
+        : el("input");
+    if (p.switch)
+      choose(ctrl, [
+        ["", "Default"],
+        [p.flag, "On"],
+        ...(p.negative ? [[p.negative, "Off"]] : []),
+      ]);
+    else if (ctrl.tagName === "SELECT")
+      choose(ctrl, [
+        ...(!p.required ? [["", "Default"]] : []),
+        ...p.choices.map((v) => [v, tidy(v)]),
+      ]);
+    else {
+      ctrl.type = p.numeric && !p.many && !p.repeat ? "number" : "text";
+      ctrl.step = "any";
+    }
+    if (
+      peer &&
+      ["port", "subnet", "node"].includes(p.name) &&
+      peer[p.name] != null
+    )
+      ctrl.value = peer[p.name];
+    ctrl.required = !!p.required && !p.switch;
+    ctrl.dataset.param = p.name;
+    ctrl.title = p.help;
+    const l = el("label", tidy(p.name));
+    l.append(ctrl);
+    box.append(l);
+  }
 }
-$("#catalog select").onchange = commandHelp;
+$("#catalog").elements.command.onchange = () => commandHelp();
 $("#catalog").onsubmit = (e) => {
   e.preventDefault();
-  const f = e.target.elements;
-  try {
-    const args = JSON.parse(f.args.value);
-    if (!Array.isArray(args) || args.some((s) => typeof s !== "string"))
-      throw Error("Use an array of argument strings");
-    review({
-      name: f.command.value,
-      args,
-      apply: e.submitter.value === "apply",
-    });
-  } catch (err) {
-    showResult(err.message);
+  const form = e.target,
+    c = catalog.commands.find((c) => c.name === form.elements.command.value),
+    args = [];
+  for (const p of c.parameters) {
+    const value = $('[data-param="' + p.name + '"]', form).value.trim();
+    if (!value) continue;
+    if (p.switch) {
+      args.push(value);
+      continue;
+    }
+    const vs = p.many || p.repeat ? value.split(/[ ,]+/) : [value];
+    if (p.repeat) {
+      for (const v of vs) args.push(p.flag, v);
+    } else {
+      if (p.flag) args.push(p.flag);
+      args.push(...vs);
+    }
   }
+  review({ name: c.name, args, apply: e.submitter.value === "apply" });
 };
 async function init() {
   connect();
@@ -1002,6 +1077,7 @@ async function init() {
       $("#trpc select[name=method]"),
       catalog.methods.map((m) => [m, tidy(m)]),
     );
+    trpcFields();
     function reasons() {
       const host = $("#read-error").elements.source.value === "5";
       choose(

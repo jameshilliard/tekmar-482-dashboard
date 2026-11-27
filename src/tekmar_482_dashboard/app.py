@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from tekmar_482 import DeviceMode, ErrorReason, ThaSetback, TrpcMethod
+from tekmar_482.trpc import method_spec
 
 from .gateway import Gateway
 from .operations import catalog
@@ -97,7 +98,13 @@ def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
             "native_sources": [
                 p
                 for p in gateway.feed.peers.values()
-                if p.get("address") == address and "node" in p
+                if p.get("address") == address
+                and "node" in p
+                and p.get("port") == row.get("port")
+                and (
+                    p.get("model") == row.get("model")
+                    or not (p.get("model") or p.get("family"))
+                )
             ],
         }
 
@@ -106,6 +113,11 @@ def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
         return {
             "commands": catalog(gateway.vendor),
             "methods": [m.name for m in TrpcMethod],
+            "method_fields": {
+                m.name: [f.name for f in spec.fields]
+                for m in TrpcMethod
+                if (spec := method_spec(m))
+            },
             "reasons": [r.name for r in ErrorReason],
             "vendor": gateway.vendor,
             "locked": token is not None,

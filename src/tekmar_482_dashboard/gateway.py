@@ -31,17 +31,18 @@ from tekmar_482 import (
     TrpcService,
     open_gateway,
 )
-from tekmar_482.cli_trace import trace_record
 from tekmar_482.packet import TYPE_NORMAL_TRACE, TYPE_TN4, TYPE_TRPC
-from tekmar_482.raw import InvalidCapture, decode_raw_packet
-from tekmar_482.tpck import serialize
+from tekmar_482.raw import InvalidCapture, PortError, TxResult, decode_raw_packet
 from tekmar_482.wire_trace import observe_bridge_packets
 
 from . import operations
 from .devices import Inventory
+from .endpoints import native_endpoints, trpc_endpoints
 from .feed import Feed, Row, data
 from .identity import identify_sources
-from .trace_view import native_quality, native_spans, span, trpc_quality, trpc_spans
+from .native_layout import native_spans
+from .trace_view import native_quality, trpc_quality, trpc_spans
+from .wire_layout import Span, diagram, field, group, opaque
 
 
 class Gateway:
@@ -255,8 +256,8 @@ class Gateway:
                     port=int(counter.source)
                     if counter.source != ErrorSource.GATEWAY
                     else None,
-                    quality="error",
-                    reason=f"{counter.source.name}: {counter.reason.name.replace('_', ' ').lower()}",
+                    quality="info",
+                    notice=f"{counter.source.name}: {counter.reason.name.replace('_', ' ').lower()}",
                 )
             raise ConnectionError("Error reporting stream ended")
 
@@ -276,25 +277,42 @@ class Gateway:
         return item
 
     def _native(
-        self, frame: NativeFrame, direction: str, *, observed: bool, **meta: Any
+        self,
+        packet: Packet,
+        frame: NativeFrame,
+        direction: str,
+        *,
+        observed: bool,
+        prefix: list[Span],
+        **meta: Any,
     ) -> None:
-        key = self.feed.observe(frame) if observed else None
+        decoded = frame.decoded
+        key = self.feed.observe(frame, decoded) if observed else None
         if key and frame.message.name in {
             "AirGroupMemberStatus",
             "AirGroupMasterStatus",
             "SetpointStatus",
         }:
             self.inventory.observed_device(key)
-        quality, why = native_quality(frame)
+        header, payload = native_spans(frame, decoded)
+        quality, why = native_quality(frame, decoded, payload)
         if meta.get("outcome") not in (None, "ack"):
-            quality, why = (
-                "error",
-                "Gateway transmit: " + str(meta["outcome"]).replace("_", " "),
+            meta["notice"] = "Gateway transmit: " + str(meta["outcome"]).replace(
+                "_", " "
             )
         elif meta.get("early_start"):
-            quality, why = "error", "Frame started before the minimum interframe gap"
+            meta["notice"] = "Frame started before the minimum interframe gap"
+        elif (
+            frame.message.name == "NetworkError"
+            and frame.message.payload
+            and frame.message.payload[0]
+        ):
+            meta["notice"] = (
+                f"Device fault {frame.message.payload[0]:#04x}: {decoded.get('description', 'unidentified')}"
+            )
+        kind = "Normal trace" if packet.type == TYPE_NORMAL_TRACE else "Raw"
         self.feed.publish(
-            "tn4",
+            "host" if direction == "host_tx" else "tn4",
             direction,
             frame.message.name or f"0x{frame.message_id:03X}",
             message_id=frame.message_id,
@@ -302,210 +320,273 @@ class Gateway:
             subnet=frame.subnet,
             node=frame.node,
             peer=key,
-            gateway_ms=frame.timestamp_ms,
             hex=frame.body.hex(),
-            spans=native_spans(frame),
-            fields=frame.decoded,
+            fields=decoded,
+            endpoints=native_endpoints(frame, decoded, received=direction == "rx"),
             quality=quality,
             reason=why,
+            **diagram(
+                packet,
+                group(
+                    "Payload · " + kind,
+                    [group("Record", prefix, column="record"), header, payload],
+                ),
+            ),
+            **meta,
+        )
+
+    @staticmethod
+    def _prefix(kind: str, port: int, ms: int | None = None) -> list[Span]:
+        prefix = [field(1, kind, "service"), field(1, f"Bus {port}", "envelope")]
+        if ms is not None:
+            prefix.append(field(4, f"Gateway: {ms} ms", "envelope"))
+        return prefix
+
+    def _invalid(self, packet: Packet, record: InvalidCapture, **meta: Any) -> None:
+        why = str(data(record.reason)).replace("_", " ")
+        prefix = [
+            *self._prefix("Invalid RX", record.port, record.timestamp_ms),
+            field(1, f"Failure: {why}", "unknown"),
+            field(2, f"Bit count: {record.bit_count}", "envelope"),
+        ]
+        parts = [group("Record", prefix, column="record")]
+        if record.bits:
+            captured = field(
+                len(record.bits), "Captured tN4 bits (MSB first)", "unknown"
+            )
+            captured["column"] = "payload"
+            parts.append(captured)
+        self.feed.publish(
+            "tn4",
+            "rx_invalid",
+            "Invalid tN4 frame",
+            port=record.port,
+            gateway_ms=record.timestamp_ms,
+            bit_count=record.bit_count,
+            hex=record.bits.hex(),
+            quality="error",
+            reason=f"Invalid tN4 frame: {why}",
+            **diagram(packet, group("Payload · Invalid capture", parts)),
+            **meta,
+        )
+
+    def _trpc(self, packet: Packet, sample: TrpcPacket, tx: bool, **meta: Any) -> None:
+        parts = trpc_spans(packet, sample)
+        quality, why, notice = trpc_quality(packet, sample, parts)
+        peer = None
+        if (
+            self.vendor
+            and not tx
+            and sample.service
+            in (
+                TrpcService.REPORT,
+                TrpcService.RESPONSE_REQUEST,
+                TrpcService.RESPONSE_UPDATE,
+            )
+        ):
+            peer = self.feed.stock_report(sample)
+        name = parts[1]["label"]
+        children = parts[:2]
+        children[0]["column"] = "service"
+        children[1]["column"] = "method"
+        if parts[2:]:
+            children.append(group("Parameters", parts[2:], column="payload"))
+        self.feed.publish(
+            "trpc",
+            "host_tx" if tx else "host_rx",
+            name,
+            service=sample.service_name,
+            hex=packet.data.hex(),
+            fields=dict(sample.body),
+            endpoints=trpc_endpoints(sample),
+            peer=peer,
+            quality=quality,
+            reason=why,
+            notice=notice,
+            **diagram(packet, group("Payload · tRPC", children)),
             **meta,
         )
 
     def _wire(self, packet: Packet, tx: bool, *, captures: bool = True) -> None:
+        direction = "host_tx" if tx else "host_rx"
         try:
-            self._record_wire(packet, tx, captures=captures)
+            if packet.type == TYPE_TRPC:
+                self._trpc(packet, TrpcPacket.from_packet(packet), tx)
+                return
+            if packet.type == TYPE_TN4 and len(packet.data) >= 2:
+                raw, port = packet.data, packet.data[1]
+                if tx and raw[0] == 1:
+                    self._native(
+                        packet,
+                        NativeFrame(port, 0, raw[2:]),
+                        direction,
+                        observed=False,
+                        prefix=self._prefix("Send", port),
+                    )
+                    return
+                if not tx and raw[0] in (0, 4) and not captures:
+                    return  # Delivered once by the stream, which also accounts for gaps.
+                if not tx:
+                    record = decode_raw_packet(packet)
+                    if isinstance(record, NativeFrame):
+                        self._native(
+                            packet,
+                            record,
+                            "rx",
+                            observed=True,
+                            prefix=self._prefix("RX", port, record.timestamp_ms),
+                            gateway_ms=record.timestamp_ms,
+                        )
+                    elif isinstance(record, InvalidCapture):
+                        self._invalid(packet, record)
+                    else:
+                        self._raw_result(packet, record)
+                    return
         except (ProtocolError, ValueError) as err:
             self.feed.publish(
                 "tpck",
-                "host_tx" if tx else "host_rx",
+                direction,
                 "Malformed packet",
                 hex=packet.data.hex(),
-                wire_hex=serialize(packet).hex(),
+                protocol="trpc" if packet.type == TYPE_TRPC else "gateway",
                 quality="error",
                 reason=str(err),
+                **opaque(packet),
             )
+            return
+        self.feed.publish(
+            "tpck",
+            direction,
+            f"Type {packet.type:#04x}",
+            hex=packet.data.hex(),
+            quality="partial",
+            reason="Unrecognized TPCK packet type or service",
+            **opaque(packet),
+        )
 
-    def _record_wire(self, packet: Packet, tx: bool, *, captures: bool) -> None:
-        direction = "host_tx" if tx else "host_rx"
-        wire = serialize(packet).hex()
-        if packet.type == TYPE_TRPC:
-            message = TrpcPacket.from_packet(packet)
-            spans = trpc_spans(packet, message)
-            quality, why = trpc_quality(packet, message)
-            self.feed.publish(
-                "trpc",
-                direction,
-                spans[1]["label"],
-                service=message.service_name,
-                hex=packet.data.hex(),
-                wire_hex=wire,
-                spans=spans,
-                fields=dict(message.body),
-                quality=quality,
-                reason=why,
-            )
-        elif packet.type == TYPE_TN4 and len(packet.data) >= 2:
-            raw, port = packet.data, packet.data[1]
-            if tx and raw[0] == 1:
-                frame = NativeFrame(port, 0, raw[2:])
-                quality, why = native_quality(frame)
-                self.feed.publish(
-                    "host",
-                    direction,
-                    "Raw Send",
-                    port=port,
-                    hex=raw.hex(),
-                    wire_hex=wire,
-                    spans=[
-                        span(raw[:2], f"Send · bus {port}", "service"),
-                        *native_spans(frame),
-                    ],
-                    fields=frame.decoded,
-                    quality=quality,
-                    reason=why,
-                )
-            elif not tx and raw[0] in (0, 4) and not captures:
-                return  # RawDispatcher owns these capture records.
-            elif not tx:
-                record = decode_raw_packet(packet)
-                if isinstance(record, NativeFrame):
-                    self._native(record, "rx", observed=True, wire_hex=wire)
-                else:
-                    detail = data(record)
-                    why = detail.get("reason")
-                    self.feed.publish(
-                        "tn4" if isinstance(record, InvalidCapture) else "host",
-                        "rx_invalid"
-                        if isinstance(record, InvalidCapture)
-                        else direction,
-                        type(record).__name__,
-                        port=port,
-                        hex=raw.hex(),
-                        wire_hex=wire,
-                        spans=[span(raw, type(record).__name__, "payload")],
-                        fields=detail,
-                        quality="error" if why is not None else "good",
-                        reason=str(why).replace("_", " ")
-                        if why is not None
-                        else "Link acknowledged",
-                    )
-        else:
-            self.feed.publish(
-                "tpck",
-                direction,
-                f"Type {packet.type:#04x}",
-                hex=packet.data.hex(),
-                wire_hex=wire,
-                quality="partial",
-                reason="Unrecognized TPCK packet type or service",
-            )
+    def _raw_result(self, packet: Packet, record: TxResult | PortError) -> None:
+        name = "Port error" if isinstance(record, PortError) else "TX result"
+        parts = self._prefix(name, record.port)
+        if isinstance(record, TxResult):
+            parts.append(field(1, f"Outcome: {record.status.name}", "field"))
+        why = record.reason
+        if why is not None:
+            reason = field(1, f"Reason: {data(why)}")
+            if type(why) is int:
+                reason["coverage"] = "unknown"
+            parts.append(reason)
+        self.feed.publish(
+            "host",
+            "host_rx",
+            name,
+            port=record.port,
+            hex=packet.data.hex(),
+            fields=data(record),
+            quality="partial" if type(why) is int else "good",
+            reason="Unknown reason code" if type(why) is int else "Valid link result",
+            notice=str(data(why)).replace("_", " ") if why is not None else None,
+            **diagram(packet, group("Payload · Raw", parts)),
+        )
 
     async def _normal_frames(self, trace: NormalTrace) -> None:
         async for event in trace:
             if isinstance(event, CaptureGap):
                 self.feed.gap(event.dropped)
                 continue
-            sample = event.decoded
-            if sample is None and event.packet.type == TYPE_TRPC:
-                self._wire(event.packet, event.outbound)
+            packet = event.packet
+            stamp = event.host_monotonic_ns
+            if packet.type == TYPE_TRPC:
+                self._wire(packet, event.outbound)
                 continue
-            if sample is None and event.packet.type == TYPE_NORMAL_TRACE:
-                raw = event.packet.data
-                known = not raw or raw[0] in {0, 1, 4}
+            sample = event.decoded
+            if isinstance(sample, (TraceRx, TraceTx)):
+                frame = sample.frame
+                rx = isinstance(sample, TraceRx)
+                prefix = self._prefix(
+                    "RX" if rx else "TX attempt", frame.port, frame.timestamp_ms
+                )
+                meta: Row = {
+                    "gateway_ms": frame.timestamp_ms,
+                    "host_monotonic_ns": stamp,
+                }
+                if isinstance(sample, TraceRx):
+                    meta.update(
+                        ack=bool(sample.flags & RxFlag.ACK),
+                        early_start=bool(sample.flags & RxFlag.EARLY_START),
+                    )
+                    flags = field(1, "RX flags", "envelope")
+                    flags["bits"] = [
+                        {"hi": 7, "lo": 2, "label": "Reserved"},
+                        {"hi": 1, "lo": 1, "label": "Early start"},
+                        {"hi": 0, "lo": 0, "label": "ACK"},
+                    ]
+                    prefix.append(flags)
+                else:
+                    meta.update(
+                        origin=data(sample.origin),
+                        outcome=data(sample.failure)
+                        if sample.failure is not None
+                        else "ack",
+                    )
+                    prefix.extend(
+                        [
+                            field(1, f"Origin: {meta['origin']}", "envelope"),
+                            field(1, f"Outcome: {meta['outcome']}", "envelope"),
+                        ]
+                    )
+                self._native(
+                    packet,
+                    frame,
+                    "rx" if rx else "tx",
+                    observed=rx and not meta.get("early_start"),
+                    prefix=prefix,
+                    **meta,
+                )
+            elif isinstance(sample, InvalidCapture):
+                self._invalid(packet, sample, host_monotonic_ns=stamp)
+            elif packet.type == TYPE_NORMAL_TRACE:
+                known = not packet.data or packet.data[0] in (0, 1, 4)
                 self.feed.publish(
                     "tpck",
                     "host_rx",
                     "Normal trace record",
-                    hex=raw.hex(),
-                    wire_hex=serialize(event.packet).hex(),
+                    hex=packet.data.hex(),
+                    protocol="tn4",
                     quality="error" if known else "partial",
                     reason="Invalid trace record length, port or native body"
                     if known
                     else "Unknown trace record kind",
+                    host_monotonic_ns=stamp,
+                    **opaque(packet),
                 )
-                continue
-            if isinstance(sample, TrpcPacket) and not self.vendor:
-                self._wire(event.packet, event.outbound)
-                continue
-            if isinstance(sample, TraceRx):
-                self._native(
-                    sample.frame,
-                    "rx",
-                    observed=not bool(sample.flags & RxFlag.EARLY_START),
-                    ack=bool(sample.flags & RxFlag.ACK),
-                    early_start=bool(sample.flags & RxFlag.EARLY_START),
-                    wire_hex=serialize(event.packet).hex(),
-                )
-                continue
-            if isinstance(sample, TraceTx):
-                self._native(
-                    sample.frame,
-                    "tx",
-                    observed=False,
-                    origin=data(sample.origin),
-                    outcome=data(sample.failure)
-                    if sample.failure is not None
-                    else "ack",
-                    wire_hex=serialize(event.packet).hex(),
-                )
-                continue
-            row = trace_record(event)
-            if (
-                self.vendor
-                and not event.outbound
-                and isinstance(sample, TrpcPacket)
-                and sample.service
-                in (
-                    TrpcService.REPORT,
-                    TrpcService.RESPONSE_REQUEST,
-                    TrpcService.RESPONSE_UPDATE,
-                )
-            ):
-                row["peer"] = self.feed.stock_report(sample)
-            if isinstance(sample, TrpcPacket):
-                row["spans"] = trpc_spans(event.packet, sample)
-                row["quality"], row["reason"] = trpc_quality(event.packet, sample)
-            if isinstance(sample, InvalidCapture):
-                why = data(sample.reason)
-                row.update(
-                    quality="error",
-                    reason=f"Invalid tN4 frame: {str(why).replace('_', ' ')}",
-                )
-            row["wire_hex"] = serialize(event.packet).hex()
-            layer = str(row.pop("layer", "tpck"))
-            direction = str(row.pop("direction", "rx"))
-            method = row.get(
-                "method",
-                row.get("message_id", row.get("reason", row.get("type", "Packet"))),
-            )
-            value = row.pop("body_hex", row.pop("payload_hex", row.pop("bits_hex", "")))
-            self.feed.publish(
-                layer,
-                direction,
-                f"0x{method:X}" if isinstance(method, int) else str(method),
-                hex=value,
-                **row,
-            )
+            else:
+                self._wire(packet, event.outbound)
 
     async def _raw_frames(self, raw: BridgeStream) -> None:
         while True:
             record = await raw.read()
-            if isinstance(record, NativeFrame):
-                self._native(record, "rx", observed=True)
-            elif isinstance(record, CaptureGap):
+            if isinstance(record, CaptureGap):
                 self.feed.gap(record.dropped)
-            else:
-                row = data(record)
-                self.feed.publish(
-                    "tn4",
-                    "rx_invalid" if "bits" in row else "port_error",
-                    str(row.get("reason", "Invalid")),
-                    port=record.port,
-                    hex=row.get("bits", ""),
-                    fields=row,
-                    quality="error",
-                    reason=str(row.get("reason", "Unknown error")).replace("_", " "),
+            elif isinstance(record, NativeFrame):
+                prefix = bytes((0, record.port)) + record.timestamp_ms.to_bytes(
+                    4, "little"
                 )
+                self._native(
+                    Packet(TYPE_TN4, prefix + record.body),
+                    record,
+                    "rx",
+                    observed=True,
+                    prefix=self._prefix("RX", record.port, record.timestamp_ms),
+                    gateway_ms=record.timestamp_ms,
+                )
+            elif isinstance(record, InvalidCapture):
+                prefix = (
+                    bytes((4, record.port))
+                    + record.timestamp_ms.to_bytes(4, "little")
+                    + bytes((record.reason,))
+                    + record.bit_count.to_bytes(2, "little")
+                )
+                self._invalid(Packet(TYPE_TN4, prefix + record.bits), record)
 
     async def command(self, name: str, args: list[str], apply: bool) -> str:
         # Validate before interrupting capture. Never retry an operator operation.
