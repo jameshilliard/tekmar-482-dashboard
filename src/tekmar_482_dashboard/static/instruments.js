@@ -62,7 +62,10 @@ export function deviceCard(d, onClick, summary = []) {
       "",
       d.family === "gateway"
         ? "Interface gateway"
-        : (d.address != null ? "tHA " + d.address + " · " : "") +
+        : d.routes
+          ? d.routes.length +
+            (d.routes.length === 1 ? " network path" : " network paths")
+          : (d.address != null ? "tHA " + d.address + " · " : "") +
             (d.port == null ? "Inventory" : "Bus " + d.port) +
             (d.node == null
               ? ""

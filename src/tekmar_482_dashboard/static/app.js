@@ -3,7 +3,11 @@ import { trafficPanel } from "./traffic.js";
 import { parameters as facts, thermostatSummary } from "./parameters.js";
 import { deviceCard, instrument, tracePath, packet } from "./instruments.js";
 import { TraceTabs } from "./traces.js";
-import { additionalDeviceKeys, inventoryPaths } from "./endpoints.js";
+import {
+  additionalDeviceKeys,
+  groupControlPaths,
+  inventoryPaths,
+} from "./endpoints.js";
 import { ClientInspector } from "./client-trace.js";
 import { wireDiagram } from "./wire.js";
 const $ = (q, root = document) => root.querySelector(q);
@@ -370,6 +374,7 @@ function showCards(peers) {
       d.node,
       d.subnet,
       d.temperature_f,
+      d.routes?.map((p) => p.key),
       summary,
     ]);
     const old = deviceViews.get(d.key);
@@ -410,17 +415,47 @@ function showCards(peers) {
     );
   }
   const additional = additionalDeviceKeys(paths, shown.peers);
-  for (const p of peers) {
-    if (!additional.has(p.key)) continue;
-    append(p, thermostatSummary({}, p), () =>
-      peerDetails(shown.peers.find((row) => row.key === p.key) || p),
-    );
+  for (const p of groupControlPaths(
+    peers.filter((row) => additional.has(row.key)),
+  )) {
+    if (p.routes) {
+      append(p, [], () => controlPaths(p));
+    } else {
+      append(p, thermostatSummary({}, p), () =>
+        peerDetails(shown.peers.find((row) => row.key === p.key) || p),
+      );
+    }
   }
   for (const [key, view] of deviceViews)
     if (!present.has(key)) {
       view.node.remove();
       deviceViews.delete(key);
     }
+}
+function controlPaths(group) {
+  const table = el("table"),
+    header = table.createTHead().insertRow();
+  for (const title of ["Gateway port", "Subnet", "Node", "Frames"]) {
+    const th = el("th", title);
+    th.scope = "col";
+    header.append(th);
+  }
+  const keys = new Set(group.routes.map((p) => p.key));
+  const routes = shown.peers
+    .filter(
+      (p) =>
+        keys.has(p.key) && p.model === group.model && p.family === group.family,
+    )
+    .sort((a, b) => a.port - b.port || a.subnet - b.subnet || a.node - b.node);
+  rows(
+    table.createTBody(),
+    routes,
+    "No matching network paths",
+    4,
+    (p) => [p.port, hex(p.subnet), hex(p.node), number(p.count)],
+    peerDetails,
+  );
+  openDetail("tekmar " + group.model + " · Network paths", [table]);
 }
 async function deviceDetails(address) {
   try {

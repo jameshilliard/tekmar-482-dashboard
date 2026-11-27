@@ -46,6 +46,30 @@ export function additionalDeviceKeys(paths, peers) {
       .map((p) => p.key),
   );
 }
+
+export function groupControlPaths(peers) {
+  const entries = [],
+    models = new Map();
+  for (const p of peers) {
+    if (p.family !== "reset_control" || !p.model || p.node == null) {
+      entries.push(p);
+      continue;
+    }
+    let group = models.get(p.model);
+    if (!group) {
+      group = {
+        key: "paths:reset_control:" + p.model,
+        family: p.family,
+        model: p.model,
+        routes: [],
+      };
+      models.set(p.model, group);
+      entries.push(group);
+    }
+    group.routes.push(p);
+  }
+  return entries;
+}
 export class Endpoints {
   constructor(select, onChange) {
     this.select = select;

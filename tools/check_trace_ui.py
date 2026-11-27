@@ -12,12 +12,15 @@ from playwright.sync_api import Page, expect, sync_playwright
 
 def check_inventory_paths(page: Page) -> None:
     results = page.evaluate("""async () => {
-        const {additionalDeviceKeys, inventoryPaths, Endpoints} = await import('/static/endpoints.js');
+        const {additionalDeviceKeys, groupControlPaths, inventoryPaths, Endpoints} = await import('/static/endpoints.js');
         const local = {key:'0:08:02', port:0, subnet:8, node:2, address:23,
                        family:'thermostat', model:'530', temperature_f:67};
         const device = {...local, key:'tha:23'};
         const copy = {...local, key:'3:08:02', port:3, address:3023, temperature_f:null};
         const controller = {...copy, family:'reset_control', node:31, model:'400', key:'3:08:1F'};
+        const remote = {...controller, key:'4:08:1F', port:4};
+        const different = {...controller, key:'4:10:1F', port:4, subnet:16, model:'401'};
+        const [unit, group, second] = groupControlPaths([local, controller, remote, different]);
         const cases = [
             [[], [copy], [copy.key]],
             [[device], [local, copy, controller], [controller.key]],
@@ -31,7 +34,10 @@ def check_inventory_paths(page: Page) -> None:
         ];
         const chooser = new Endpoints(document.createElement('select'), () => {});
         chooser.update([device], [local, copy]);
-        return [chooser.canonical(local.key) === device.key, chooser.canonical(copy.key) === copy.key,
+        return [unit === local, group.routes.length === 2 && group.routes[0] === controller
+                && group.routes[1] === remote && !('address' in group) && !('port' in group),
+            second.routes.length === 1 && second.routes[0] === different,
+            chooser.canonical(local.key) === device.key, chooser.canonical(copy.key) === copy.key,
             ...cases.map(([devices,peers,expected]) => {
                 const keys = additionalDeviceKeys(inventoryPaths(devices,peers),peers);
                 return keys.size === expected.length && expected.every(k => keys.has(k));
@@ -148,6 +154,14 @@ def check(page: Page, url: str, screenshots: Path | None) -> None:
     card = page.locator('.device-record[data-device^="tha:"]:has(.thermo)').first
     card.wait_for(timeout=120_000)
     check_inventory_paths(page)
+    groups = page.locator('.device-record[data-device^="paths:reset_control:"]')
+    if groups.count():
+        groups.first.locator("button").click()
+        route = modal.locator("tbody tr[tabindex]").first
+        expect(route).to_be_visible()
+        route.press("Enter")
+        modal.get_by_role("heading", name="Decoded device data").wait_for()
+        modal.get_by_role("button", name="Close details").click()
     assert not page.locator("#device-cards .parameters").count()
     page.locator('[data-device="gateway"] .instrument').click()
     modal.get_by_role("heading", name="Gateway configuration").wait_for()
