@@ -33,6 +33,29 @@ ENDPOINT = GatewayEndpoint.tcp("192.0.2.1", 3001)
 
 
 class FeedTests(unittest.TestCase):
+    def test_bit_meanings_belong_to_the_correct_thermostat_byte_and_range(self) -> None:
+        for status, expected in ((0x13, "Occupied (2-event)"), (0x1F, "unknown")):
+            body = (
+                bytes.fromhex("76f00608 00")
+                + bytes([status])
+                + bytes.fromhex("2b0a06000000")
+            )
+            frame = NativeFrame(1, 0, body)
+            _, payload = native_spans(frame, frame.decoded)
+            status_bits = payload["children"][1]["bits"]
+            by_name = {b["label"]: b for b in status_bits}
+            self.assertEqual(
+                (by_name["Demand"]["lo"], by_name["Demand"]["meaning"]), (1, "Active")
+            )
+            self.assertEqual(by_name["Enabled"]["meaning"], "Enabled")
+            schedule = by_name["Schedule"]
+            self.assertEqual(
+                (schedule["hi"], schedule["lo"], schedule["meaning"]), (4, 2, expected)
+            )
+            self.assertEqual(
+                schedule.get("coverage"), "unknown" if status == 0x1F else None
+            )
+
     def test_normal_transfer_headers_and_embedded_native_bytes(self) -> None:
         for wire, last, quality in (
             ("0401f04b54 020005bf01", "Feature flags: 447", "good"),

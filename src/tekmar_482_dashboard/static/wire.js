@@ -101,11 +101,25 @@ export function wireDiagram(event, inspect = false, columns = null) {
         const range = "b" + bit.hi + (width > 1 ? ":" + bit.lo : "");
         const g = element("span", "bit-group");
         coverage(g, bit.coverage);
-        g.dataset.label = range + " " + bit.label;
-        g.append(
-          element("code", "bit-value", v.toString(2).padStart(width, "0")),
-          element("small", "", range + " " + bit.label),
-        );
+        const binary = v.toString(2).padStart(width, "0");
+        if (bit.meaning != null) {
+          const summary =
+            bit.label === "Enabled"
+              ? bit.meaning
+              : bit.label + ": " + bit.meaning;
+          g.classList.add("has-meaning");
+          g.dataset.label = summary + " (" + range + " = " + binary + ")";
+          g.append(
+            element("small", "bit-summary", summary),
+            element("code", "bit-value", range + "=" + binary),
+          );
+        } else {
+          g.dataset.label = range + " " + bit.label;
+          g.append(
+            element("code", "bit-value", binary),
+            element("small", "", range + " " + bit.label),
+          );
+        }
         groups.append(g);
       }
       leaf.append(groups);

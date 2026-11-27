@@ -1061,6 +1061,21 @@ dialog .work-form button {
 .trace-row .bit-group small {
   overflow-wrap: anywhere;
 }
+.trace-row .bit-group.has-meaning {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0 0.3rem;
+}
+.bit-group .bit-summary {
+  font-weight: 650;
+  color: inherit;
+}
+.bit-group.has-meaning .bit-value {
+  font-weight: 450;
+  color: #415752;
+  white-space: nowrap;
+}
 .trace-row .cell-fields:empty::before {
   content: "–";
   color: #687975;

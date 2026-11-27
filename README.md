@@ -71,6 +71,8 @@ Protocol fields occupy fixed columns. Open a frame for one nested, wire-order
 diagram with escaped bytes, offsets and bit ranges. Green marks decoded data;
 amber hatching marks the specific unresolved bits or bytes. Red means invalid
 data, not a correctly decoded device fault, which gets a separate notice.
+Known payload flags show their meaning alongside the bit position and binary
+value, including thermostat demand, supported slots and active schedule.
 Scroll into history to hold your place while capture continues, or select
 **Jump to live** to follow again.
 Host wire bytes are reconstructed from accepted TPCK frames; they are

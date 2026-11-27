@@ -13,6 +13,7 @@ class Bit(TypedDict):
     hi: int
     lo: int
     label: str
+    meaning: NotRequired[str]
     coverage: NotRequired[Coverage]
 
 

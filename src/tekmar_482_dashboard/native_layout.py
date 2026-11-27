@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from tekmar_482 import NativeFrame
 from tekmar_482._native_payloads import block_fields, control_words
+from tekmar_482._native_payloads.codec import SETBACK
 from tekmar_482._native_payloads.layouts import FIXED_BLOCKS
 
 from .wire_layout import Bit, Span, Values, group, span
@@ -43,6 +44,44 @@ def air_status(side: str = "") -> Packed:
 WATER = flags("Water subnet", ("Bus", 3), ("Control", 5))
 NODE = flags("Destination", ("Node", 5), ("Flags", 3))
 SUPPORT = flags("Supported slots", *((f"Slot {i + 1}", 1) for i in range(8)))
+
+_STATES = {
+    "Enabled": ("Disabled", "Enabled"),
+    "Demand": ("Idle", "Active"),
+    "Output on": ("Off", "On"),
+    "Weather shutdown": ("Inactive", "Active"),
+    "Inhibit heat": ("Not inhibited", "Inhibited"),
+    "Inhibit cool": ("Not inhibited", "Inhibited"),
+    "Freeze protect": ("Inactive", "Active"),
+    "Access lock": ("Unlocked", "Locked"),
+    "Address lock": ("Unlocked", "Locked"),
+    "Locked": ("Unlocked", "Locked"),
+    "Request master": ("Not requested", "Requested"),
+    "Master": ("No", "Yes"),
+    "New cycle": ("No", "Yes"),
+}
+
+
+def bit_meaning(name: str, field: Packed, value: int, width: int) -> str | None:
+    if field is SUPPORT:
+        return "Supported" if value else "Not reported"
+    if (field is STATUS and name == "Setback") or (
+        field.label in {"Air status", "Heat status", "Cool status"}
+        and name == "Schedule"
+    ):
+        return SETBACK[value]
+    if width == 1 and name in _STATES:
+        return _STATES[name][value]
+    return None
+
+
+def describe(code: str) -> str:
+    if code in {"occupied_4", "occupied_2", "unoccupied_4", "unoccupied_2"}:
+        state, events = code.split("_")
+        return f"{state.capitalize()} ({events}-event)"
+    return code.replace("_", " ")
+
+
 SIMPLE: dict[str, tuple[Field, ...]] = {
     "NetworkError": (
         "code",
@@ -419,10 +458,11 @@ def native_spans(frame: NativeFrame, fields: Values) -> tuple[Span, Span]:
                     bit["coverage"] = "unknown"
                 elif name == "Reserved":
                     bit["coverage"] = "unused"
+                meaning = bit_meaning(name, field, value, width) if index >= 4 else None
                 if index >= 4 and key in fields:
                     val = fields[key]
                     if isinstance(val, str):
-                        name += ": " + val.replace("_", " ")
+                        meaning = val
                         if val in {"unknown", "ambiguous", "unsupported"}:
                             bit["coverage"] = "unknown"
                     if len(spec) == 3 or val == value:
@@ -432,8 +472,13 @@ def native_spans(frame: NativeFrame, fields: Values) -> tuple[Span, Span]:
                     )
                     if named in fields:
                         used.add(named)
-                        name += ": " + str(fields[named]).replace("_", " ")
-                bit["label"] = name
+                        meaning = str(fields[named])
+                if meaning is not None:
+                    if meaning in {"unknown", "ambiguous", "unsupported"}:
+                        bit["coverage"] = "unknown"
+                    bit["meaning"] = describe(meaning)
+                elif index >= 4 and "coverage" not in bit:
+                    bit["meaning"] = str(value)
                 bits.append(bit)
                 pos += width
             part["bits"] = bits[::-1]
