@@ -4,6 +4,7 @@ from contextlib import suppress
 
 from tekmar_482 import NullTransport, Packet, Tekmar482Client
 
+from tekmar_482_dashboard.client_trace import Hint
 from tekmar_482_dashboard.compat import Compatibility, supported
 
 
@@ -67,6 +68,38 @@ class CompatibilityTests(unittest.IsolatedAsyncioTestCase):
         rows = self.server.snapshot()["active"]
         self.assertEqual([row["received"] for row in rows], [7, 0])
         self.assertEqual([row["sent"] for row in rows], [8, 8])
+        first, second = (self.server.traces[p["id"]].read(0)["events"] for p in rows)
+        self.assertEqual(sum(e["direction"] == "to_gateway" for e in first), 7)
+        self.assertTrue(
+            all(e["direction"] == "to_client" and not e["requests"] for e in second)
+        )
+        self.assertEqual(first[-1]["requests"], (first[-2]["seq"],))
+        self.assertEqual(first[-1]["wire_hex"], "06033f0100000121015c")
+        self.assertEqual(first[-1]["layout"][0]["label"], "Type: 0x06")
+        self.assertNotIn("Checksum", str(first[-1]["layout"]))
+        inventory = [e for e in first if e["name"] == "DeviceInventory"]
+        self.assertEqual(
+            [r["requests"] for r in inventory[1:]], [(inventory[0]["seq"],)] * 2
+        )
+
+    async def test_simultaneous_identical_reads_have_only_local_ambiguous_hints(
+        self,
+    ) -> None:
+        sockets = [await self.connect(), await self.connect()]
+        for _, w in sockets:
+            w.write(b"06018F0100000000\n")
+            self.assertEqual(await self.wire.tx.get(), packet("06018f0100000000"))
+        self.wire.queue_packet(packet("06048f0100000300"))
+        self.wire.queue_packet(packet("06023701000001213406"))
+        for r, _ in sockets:
+            await r.readline()
+            await r.readline()
+        for trace in self.server.traces.values():
+            reply, report = trace.read(1)["events"]
+            self.assertEqual(reply["requests"], (1,))
+            self.assertTrue(reply["ambiguous"])
+            self.assertIsNone(reply["elapsed_ms"])
+            self.assertFalse(report["requests"])
 
     async def test_filters_both_ways_without_disabling_diagnostics_or_rewriting(
         self,
@@ -93,7 +126,6 @@ class CompatibilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await r.readline(), reply.encode() + b"\n")
             self.assertEqual(tracked, [packet(p) for p in [*hidden, reply]])
         stats = self.server.snapshot()
-        self.assertEqual(stats["withheld"], len(hidden))
         self.assertEqual(stats["active"][0]["filtered"], 5)
         self.assertTrue(self.wire.tx.empty())
 
@@ -118,7 +150,7 @@ class CompatibilityTests(unittest.IsolatedAsyncioTestCase):
         fast, _ = await self.connect()
         task, peer = next(iter(self.server.peers.items()))
         while not peer.outbox.full():
-            peer.outbox.put_nowait((b"test\n", "test"))
+            peer.outbox.put_nowait((b"test\n", "test", packet("060200000000"), Hint()))
         report = "06023701000001213406"
         self.server.publish(packet(report))
         self.assertEqual(await fast.readline(), report.encode() + b"\n")

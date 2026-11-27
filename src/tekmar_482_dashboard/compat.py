@@ -9,12 +9,21 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, field
-from time import time
+from time import monotonic, time
 from typing import Any
 
-from tekmar_482 import Packet, Tekmar482Client, TekmarError, TrpcMethod, TrpcService
+from tekmar_482 import (
+    Packet,
+    Tekmar482Client,
+    TekmarError,
+    TrpcMethod,
+    TrpcPacket,
+    TrpcService,
+)
 from tekmar_482.packet import TYPE_TRPC
 from tekmar_482.trpc import method_spec
+
+from .client_trace import ClientTrace, Hint
 
 # The upstream integration looks up these IDs by name. Never expose a new
 # gateway method merely because our library learns to decode it.
@@ -112,7 +121,8 @@ class ClientInfo:
 class Peer:
     info: ClientInfo
     writer: asyncio.StreamWriter
-    outbox: asyncio.Queue[tuple[bytes, str]] = field(
+    trace: ClientTrace
+    outbox: asyncio.Queue[tuple[bytes, str, Packet, Hint]] = field(
         default_factory=lambda: asyncio.Queue(_OUTBOX)
     )
 
@@ -126,7 +136,8 @@ class Compatibility:
         self.client: Tekmar482Client | None = None
         self.peers: dict[asyncio.Task[None], Peer] = {}
         self.recent: deque[ClientInfo] = deque(maxlen=16)
-        self.total = self.withheld = 0
+        self.traces: dict[int, ClientTrace] = {}
+        self.total = 0
 
     async def start(self) -> None:
         if self.port is not None:
@@ -173,9 +184,13 @@ class Compatibility:
             "host": self.host if self.port is not None else None,
             "port": bound[1] if bound else self.port,
             "total": self.total,
-            "withheld": self.withheld,
-            "active": [asdict(p.info) for p in self.peers.values()],
-            "recent": [asdict(i) for i in self.recent],
+            "active": [
+                {**asdict(p.info), "trace_seq": p.trace.seq}
+                for p in self.peers.values()
+            ],
+            "recent": [
+                {**asdict(i), "trace_seq": self.traces[i.id].seq} for i in self.recent
+            ],
         }
 
     def publish(self, packet: Packet) -> None:
@@ -183,16 +198,25 @@ class Compatibility:
             return
         method = supported(packet, from_client=False)
         if method is None:
-            self.withheld += 1
             return
         line = (bytes([packet.type]) + packet.data).hex().upper().encode(
             "ascii"
         ) + b"\n"
-        item = line, TrpcService(packet.data[0]).name + " " + method.name
+        name = TrpcService(packet.data[0]).name + " " + method.name
+        msg, now = TrpcPacket.from_packet(packet), monotonic()
+        candidates = {
+            p.info.id: p.trace.candidates(msg, now)
+            for p in self.peers.values()
+            if not p.writer.is_closing()
+        }
+        count = sum(map(len, candidates.values()))
         for task, peer in self.peers.items():
             if not peer.writer.is_closing():
                 try:
-                    peer.outbox.put_nowait(item)
+                    hint = peer.trace.correlate(
+                        msg, candidates[peer.info.id], now, count
+                    )
+                    peer.outbox.put_nowait((line, name, packet, hint))
                 except asyncio.QueueFull:
                     peer.info.reason = "Client not reading"
                     peer.writer.close()
@@ -207,7 +231,8 @@ class Compatibility:
         self.total += 1
         host, port, *_ = writer.get_extra_info("peername")
         address = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
-        peer = Peer(ClientInfo(self.total, address), writer)
+        self.traces[self.total] = trace = ClientTrace(self.total)
+        peer = Peer(ClientInfo(self.total, address), writer, trace)
         task = asyncio.create_task(self._serve(reader, peer, self.client))
         self.peers[task] = peer
         task.add_done_callback(self._finished)
@@ -220,6 +245,8 @@ class Compatibility:
         if not task.cancelled() and (error := task.exception()) is not None:
             peer.info.reason = str(error) or type(error).__name__
         peer.info.reason = peer.info.reason or "Client disconnected"
+        if len(self.recent) == self.recent.maxlen:
+            del self.traces[self.recent[-1].id]
         self.recent.appendleft(peer.info)
         self.changed()
 
@@ -259,11 +286,14 @@ class Compatibility:
             peer.info.activity = time()
             if packet is None or method is None:
                 peer.info.filtered += 1
+                peer.trace.record("filtered", packet)
                 self.changed()
                 continue
             if self.client is not client:
                 raise ConnectionError("Normal gateway connection ended")
             service = TrpcService(packet.data[0])
+            peer.trace.request(packet)
+            self.changed()
             if method is TrpcMethod.DEVICE_INVENTORY and service is TrpcService.REQUEST:
                 # This exact two-byte request uses the session's serialized walk.
                 # Its original RX packets (including the sentinel) go through publish.
@@ -279,10 +309,11 @@ class Compatibility:
 
     async def _send(self, peer: Peer) -> None:
         while True:
-            line, name = await peer.outbox.get()
+            line, name, packet, hint = await peer.outbox.get()
             peer.writer.write(line)
             async with asyncio.timeout(10):
                 await peer.writer.drain()
             peer.info.sent += 1
+            peer.trace.record("to_client", packet, hint)
             peer.info.activity, peer.info.last_reply = time(), name
             self.changed()

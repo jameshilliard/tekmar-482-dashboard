@@ -3,6 +3,8 @@ import { trafficPanel } from "./traffic.js";
 import { parameters as facts, thermostatSummary } from "./parameters.js";
 import { deviceCard, instrument, tracePath, packet } from "./instruments.js";
 import { TraceTabs } from "./traces.js";
+import { ClientInspector } from "./client-trace.js";
+import { wireDiagram } from "./wire.js";
 const $ = (q, root = document) => root.querySelector(q);
 const $$ = (q, root = document) => [...root.querySelectorAll(q)];
 const el = (tag, text, cls) => {
@@ -150,6 +152,20 @@ function displayedEvents() {
   );
 }
 const traceTabs = new TraceTabs($(".trace-pane"), eventDetails, render);
+const clientInspector = new ClientInspector((e, id, context) =>
+  openDetail(e.name, [
+    el(
+      "p",
+      "Client #" +
+        id +
+        " · Record #" +
+        e.seq +
+        (context ? " · " + context : ""),
+      "capture-line",
+    ),
+    e.layout ? wireDiagram(e, true) : el("p", e.reason),
+  ]),
+);
 function spark(canvas, activity) {
   const w = 180,
     h = 34,
@@ -694,8 +710,8 @@ function renderClients(c) {
     ? `TCP · ${c.host.includes(":") ? "[" + c.host + "]" : c.host}:${c.port}`
     : "";
   $("#client-active").textContent = number(live.length);
+  clientInspector.update(c);
   $("#client-total").textContent = number(c?.total ?? 0);
-  $("#client-withheld").textContent = number(c?.withheld ?? 0);
   const label = (s) => (s ? tidy(s.toLowerCase()) : null);
   rows(
     $("#client-rows"),
@@ -713,18 +729,26 @@ function renderClients(c) {
       p.activity ? stamp(p.activity) : null,
     ],
   );
-  rows($("#client-history"), recent, "No recent disconnects", 5, (p) => [
-    p.peer,
-    stamp(p.closed),
-    number(p.received),
-    number(p.sent),
-    p.reason,
-  ]);
 }
 
 function renderDiagnostics() {
   const st = state.status,
     facts = $("#facts");
+    (p) => clientInspector.choose(p.id),
+  );
+  rows(
+    $("#client-history"),
+    recent,
+    "No recent disconnects",
+    5,
+    (p) => [
+      p.peer,
+      stamp(p.closed),
+      number(p.received),
+      number(p.sent),
+      p.reason,
+    ],
+    (p) => clientInspector.choose(p.id),
   if (st.connection === "online") {
     const settings = JSON.stringify([
       st.mode,

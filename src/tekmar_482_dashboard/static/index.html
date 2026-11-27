@@ -288,10 +288,6 @@
               <label>Total connections</label
               ><strong id="client-total">0</strong>
             </div>
-            <div>
-              <label>Gateway frames filtered</label
-              ><strong id="client-withheld">0</strong>
-            </div>
           </div>
           <div class="section-head">
             <h2>Connected clients</h2>
@@ -365,6 +361,39 @@
             </div>
             <div id="trpc-fields" class="formrow"></div>
             <button>Send transaction</button>
+          <div class="section-head client-trace-head">
+            <h2>Client tHA trace</h2>
+            <label class="device-filter"
+              >Connection
+              <select id="client-select" aria-label="Trace connection"></select
+            ></label>
+            <button type="button" class="follow" id="client-follow" disabled>
+              Following live
+            </button>
+          </div>
+          <p class="meta" id="client-trace-status" role="status"></p>
+          <div
+            class="table-scroll trace-scroll"
+            id="client-trace"
+            tabindex="0"
+            role="region"
+            aria-label="Selected client tHA traffic"
+          >
+            <table class="client-trace-table">
+              <thead>
+                <tr>
+                  <th>Time / #</th>
+                  <th>Client I/O</th>
+                  <th>Type</th>
+                  <th>Service</th>
+                  <th>Method</th>
+                  <th>Parameters</th>
+                  <th>Reply context</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
           </form>
           <form id="raw" class="work-form" hidden>
             <h2>Raw tN4 transmission</h2>

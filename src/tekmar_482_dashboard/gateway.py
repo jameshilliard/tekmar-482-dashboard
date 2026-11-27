@@ -43,7 +43,7 @@ from .endpoints import native_endpoints, trpc_endpoints
 from .feed import Feed, Row, data
 from .identity import identify_sources
 from .native_layout import native_spans
-from .trace_view import native_quality, trpc_quality, trpc_spans
+from .trace_view import native_quality, trpc_view
 from .wire_layout import Span, diagram, field, group, opaque
 
 
@@ -382,8 +382,7 @@ class Gateway:
         )
 
     def _trpc(self, packet: Packet, sample: TrpcPacket, tx: bool, **meta: Any) -> None:
-        parts = trpc_spans(packet, sample)
-        quality, why, notice = trpc_quality(packet, sample, parts)
+        name, payload, quality, why, notice = trpc_view(packet, sample)
         peer = None
         if (
             self.vendor
@@ -396,12 +395,6 @@ class Gateway:
             )
         ):
             peer = self.feed.stock_report(sample)
-        name = parts[1]["label"]
-        children = parts[:2]
-        children[0]["column"] = "service"
-        children[1]["column"] = "method"
-        if parts[2:]:
-            children.append(group("Parameters", parts[2:], column="payload"))
         self.feed.publish(
             "trpc",
             "host_tx" if tx else "host_rx",
@@ -414,7 +407,7 @@ class Gateway:
             quality=quality,
             reason=why,
             notice=notice,
-            **diagram(packet, group("Payload · tRPC", children)),
+            **diagram(packet, payload),
             **meta,
         )
 

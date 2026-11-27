@@ -1146,3 +1146,16 @@ dialog .work-form button {
     min-width: 60rem;
   }
 }
+.client-trace-table {
+  width: 100%;
+  min-width: 52rem;
+}
+.client-trace-table td {
+  vertical-align: top;
+}
+.client-trace-head {
+  flex-wrap: wrap;
+}
+.client-trace-head select {
+  max-width: 100%;
+}

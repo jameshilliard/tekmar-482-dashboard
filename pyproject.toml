@@ -22,7 +22,7 @@ tekmar-482-dashboard = "tekmar_482_dashboard.main:main"
 Repository = "https://github.com/jameshilliard/tekmar-482-dashboard"
 
 [tool.uv.sources]
-tekmar-482 = { git = "https://github.com/jameshilliard/tekmar-482.git", rev = "76e99bae5685ad5fdadf1eb649f8958c5475031b" }
+tekmar-482 = { git = "https://github.com/jameshilliard/tekmar-482.git", rev = "0e98ea71b109728da1e1eaa5661bc915a6b788e7" }
 
 [dependency-groups]
 dev = ["httpx", "ruff", "mypy", "pre-commit"]

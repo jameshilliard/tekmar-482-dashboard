@@ -65,6 +65,11 @@ Open a device icon for its complete configuration and available controls.
 Diagnostics and device dialogs can read the gateway's own 64-bit traffic
 counters. These keep counting with no connected browser or host. Port totals
 include invalid RX and non-addressed TX; device totals include valid RX and
+Select a connection for its own bounded, directional tHA history. The
+decoder is the same one used for the gateway's tRPC trace; TCP hex records
+do not have the UART framing or checksum. A compatible reply is a candidate,
+not an acknowledgement of a particular client action. Unsolicited reports
+and replies shared by other clients are shown as such.
 explicitly unicast block TX, split by link outcome. Counts restart at boot.
 
 Protocol fields occupy fixed columns. Open a frame for one nested, wire-order

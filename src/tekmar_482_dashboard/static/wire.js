@@ -35,7 +35,7 @@ export function wireDiagram(event, inspect = false, columns = null) {
   const root = element("div", "wire-view" + (inspect ? " inspecting" : ""));
   const tree = element("div", "frame-diagram");
   tree.setAttribute("role", "group");
-  tree.setAttribute("aria-label", "TPCK frame");
+  tree.setAttribute("aria-label", event.wire_format || "TPCK frame");
   const { bytes, escapes } = octets(event);
   let at = 0;
   function draw(node) {
@@ -140,11 +140,11 @@ export function wireDiagram(event, inspect = false, columns = null) {
   }
   tree.append(...event.layout.map(draw));
   root.append(tree);
-  if (inspect) enableSelection(root, tree);
+  if (inspect) enableSelection(root, tree, event.wire_format || "TPCK");
   return root;
 }
 
-function enableSelection(root, tree) {
+function enableSelection(root, tree, envelope) {
   const fields = [...tree.querySelectorAll(".wire-field")];
   if (!fields.length) return;
   const status = element("output", "wire-selection");
@@ -188,7 +188,7 @@ function enableSelection(root, tree) {
     status.textContent =
       [
         range(leaf),
-        "TPCK",
+        envelope,
         ...parents.map((p) => p.dataset.label),
         leaf.dataset.label,
         ...(bit ? [bit.dataset.label] : []),

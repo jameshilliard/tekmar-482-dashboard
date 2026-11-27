@@ -101,6 +101,13 @@ def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
     async def clients() -> dict[str, Any]:
         return gateway.compat.snapshot()
 
+    @app.get("/api/clients/{client_id}/trace")
+    async def client_trace(client_id: int, after: int = 0) -> dict[str, Any]:
+        history = gateway.compat.traces.get(client_id)
+        if history is None:
+            raise HTTPException(404, "Connection is no longer in the client history")
+        return history.read(max(0, after))
+
     @app.get("/api/peers/{key}")
     async def peer(key: str) -> dict[str, Any]:
         if key not in gateway.feed.peers:

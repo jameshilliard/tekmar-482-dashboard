@@ -100,3 +100,34 @@ def diagram(packet: Packet, payload: Span) -> Diagram:
 def opaque(packet: Packet, label: str = "Undecoded bytes") -> Diagram:
     leaves = [span(packet.data, label, "unknown")] if packet.data else []
     return diagram(packet, group("Payload", leaves))
+
+
+def tcp_record(packet: Packet, payload: Span) -> Diagram:
+    """Offsets into decoded TCP hex pairs; no UART stuffing, checksum or delimiters."""
+    offset = 1
+
+    def project(node: Span) -> Span:
+        nonlocal offset
+        if "children" in node:
+            return {**node, "children": [project(c) for c in node["children"]]}
+        leaf = node.copy()
+        offset += leaf.pop("size")
+        leaf["end"] = offset
+        return leaf
+
+    layout: list[Span] = [
+        {
+            "label": f"Type: {packet.type:#04x}",
+            "kind": "type",
+            "column": "framing",
+            "end": 1,
+        },
+        project(payload),
+    ]
+    if offset != 1 + len(packet.data):
+        raise ValueError("TCP payload field widths do not match the packet")
+    return {
+        "wire_hex": (bytes([packet.type]) + packet.data).hex(),
+        "layout": layout,
+        "escapes": [],
+    }

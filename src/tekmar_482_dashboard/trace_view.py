@@ -312,3 +312,17 @@ def trpc_spans(packet: Packet, message: TrpcPacket) -> list[Span]:
             )
         )
     return result
+
+
+def trpc_view(
+    packet: Packet, message: TrpcPacket
+) -> tuple[str, Span, str, str, str | None]:
+    """Decode tRPC once, independent of its serial or TCP envelope."""
+    parts = trpc_spans(packet, message)
+    quality, reason, notice = trpc_quality(packet, message, parts)
+    children = parts[:2]
+    children[0]["column"] = "service"
+    children[1]["column"] = "method"
+    if parts[2:]:
+        children.append(group("Parameters", parts[2:], column="payload"))
+    return parts[1]["label"], group("Payload · tRPC", children), quality, reason, notice
