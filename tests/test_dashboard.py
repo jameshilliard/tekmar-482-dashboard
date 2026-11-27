@@ -10,6 +10,7 @@ from tekmar_482 import (
     DiscoveredDevice,
     FrameCounts,
     GatewayEndpoint,
+    GatewayTraceGap,
     NativeFrame,
     NativePath,
     NormalTrace,
@@ -154,6 +155,22 @@ class FeedTests(unittest.TestCase):
         feed.gap(CaptureGap(2))
         self.assertFalse(feed.peers)
         self.assertIn("2 records", feed.events[-1]["reason"])
+
+    def test_gateway_gap_preserves_native_cards_on_other_ports(self) -> None:
+        feed = Feed()
+        keys = []
+        for port in (1, 3):
+            frame = NativeFrame(
+                port, 10, bytes.fromhex("6e7351c9 00003f 499d01 ca04 02")
+            )
+            keys.append(feed.observe(frame, frame.decoded))
+        feed.gap(GatewayTraceGap(2, 1 << 1))
+        self.assertEqual(list(feed.peers), [keys[1]])
+        self.assertEqual(feed.peers[keys[1]]["model"], "654")
+        self.assertEqual(feed.native.paths, (NativePath(3, 0x35, 7),))
+        self.assertEqual(feed.events[-1]["fields"]["ports"], [1])
+        feed.gap(CaptureGap(1))
+        self.assertFalse(feed.peers or feed.native.paths)
 
     def test_server_owns_transport_and_apply(self) -> None:
         for words in (

@@ -111,7 +111,11 @@ class Feed:
         self.publish("system", "info", message, fields=values)
 
     def gap(self, gap: CaptureGap, **detail: Any) -> None:
-        self.peers = {k: p for k, p in self.peers.items() if "node" not in p}
+        self.peers = {
+            key: peer
+            for key, peer in self.peers.items()
+            if "node" not in peer or not gap.affects(peer["port"])
+        }
         self.native.observe(gap)
         lost = gap.dropped
         fields: Row = {"dropped": str(lost)}
