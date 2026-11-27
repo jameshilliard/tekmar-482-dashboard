@@ -5,12 +5,14 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from tekmar_482 import (
+    CaptureGap,
     DeviceTraffic,
     DiscoveredDevice,
     FrameCounts,
     GatewayEndpoint,
     NativeFrame,
     NativePath,
+    NormalTrace,
     NormalTraceState,
     Packet,
     PortTraffic,
@@ -149,7 +151,7 @@ class FeedTests(unittest.TestCase):
         key = feed.observe(frame, frame.decoded)
         self.assertIsNotNone(feed.peers[key]["temperature_f"])
         self.assertIsNone(feed.peers[key]["model"])
-        feed.gap(2)
+        feed.gap(CaptureGap(2))
         self.assertFalse(feed.peers)
         self.assertIn("2 records", feed.events[-1]["reason"])
 
@@ -308,6 +310,28 @@ class ServerTests(unittest.TestCase):
 
 
 class DeviceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ordered_gateway_loss_is_not_an_invalid_frame(self) -> None:
+        gateway = Gateway(ENDPOINT)
+        trace = NormalTrace(4)
+        count = (1 << 63) + 5
+        for body in (
+            bytes.fromhex("00 02 01000000 01 76f00608 00032b0a06000000"),
+            bytes.fromhex("05 14") + count.to_bytes(8, "little"),
+            bytes.fromhex("05 00 0100000000000000"),
+        ):
+            trace.record(Packet(0xD0, body), outbound=False)
+        trace.finish()
+        await gateway._normal_frames(trace)
+        frame, gap, malformed = gateway.feed.events
+        self.assertEqual(frame["port"], 2)
+        self.assertEqual(gap["fields"], {"dropped": str(count), "ports": [2, 4]})
+        self.assertEqual(gap["quality"], "info")
+        self.assertEqual(
+            gap["layout"][3]["children"][2]["label"], f"Dropped records: {count}"
+        )
+        self.assertEqual(malformed["quality"], "error")
+        self.assertFalse(gateway.feed.peers)
+
     async def test_typed_device_edit_checks_support_and_changes_only_one_setting(
         self,
     ) -> None:

@@ -17,6 +17,7 @@ from tekmar_482 import (
     ErrorReporting,
     ErrorSource,
     GatewayEndpoint,
+    GatewayTraceGap,
     NativeFrame,
     NormalTrace,
     Packet,
@@ -528,7 +529,7 @@ class Gateway:
     async def _normal_frames(self, trace: NormalTrace) -> None:
         async for event in trace:
             if isinstance(event, CaptureGap):
-                self.feed.gap(event.dropped)
+                self.feed.gap(event)
                 continue
             packet = event.packet
             stamp = event.host_monotonic_ns
@@ -581,8 +582,41 @@ class Gateway:
                 )
             elif isinstance(sample, InvalidCapture):
                 self._invalid(packet, sample, host_monotonic_ns=stamp)
+            elif isinstance(sample, GatewayTraceGap):
+                mask = field(1, "Affected ports", "envelope")
+                mask["bits"] = [{"hi": 7, "lo": 5, "label": "Reserved"}]
+                for p in range(4, -1, -1):
+                    mask["bits"].append(
+                        {
+                            "hi": p,
+                            "lo": p,
+                            "label": f"Port {p}",
+                            "meaning": "Affected"
+                            if p in sample.ports
+                            else "Unaffected",
+                        }
+                    )
+                self.feed.gap(
+                    sample,
+                    protocol="tn4",
+                    hex=packet.data.hex(),
+                    host_monotonic_ns=stamp,
+                    **diagram(
+                        packet,
+                        group(
+                            "Normal trace",
+                            [
+                                field(1, "Gap", "envelope"),
+                                mask,
+                                field(
+                                    8, f"Dropped records: {sample.dropped}", "envelope"
+                                ),
+                            ],
+                        ),
+                    ),
+                )
             elif packet.type == TYPE_NORMAL_TRACE:
-                known = not packet.data or packet.data[0] in (0, 1, 4)
+                known = not packet.data or packet.data[0] in (0, 1, 4, 5)
                 self.feed.publish(
                     "tpck",
                     "host_rx",
@@ -603,7 +637,7 @@ class Gateway:
         while True:
             record = await raw.read()
             if isinstance(record, CaptureGap):
-                self.feed.gap(record.dropped)
+                self.feed.gap(record)
             elif isinstance(record, NativeFrame):
                 prefix = bytes((0, record.port)) + record.timestamp_ms.to_bytes(
                     4, "little"

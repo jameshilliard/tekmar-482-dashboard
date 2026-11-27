@@ -12,6 +12,7 @@ from typing import Any
 
 from tekmar_482 import (
     CaptureGap,
+    GatewayTraceGap,
     NativeFrame,
     NativePath,
     NativeState,
@@ -109,17 +110,26 @@ class Feed:
         self.status.update(values)
         self.publish("system", "info", message, fields=values)
 
-    def gap(self, lost: int) -> None:
+    def gap(self, gap: CaptureGap, **detail: Any) -> None:
         self.peers = {k: p for k, p in self.peers.items() if "node" not in p}
-        self.native.observe(CaptureGap(lost))
+        self.native.observe(gap)
+        lost = gap.dropped
+        fields: Row = {"dropped": str(lost)}
+        if isinstance(gap, GatewayTraceGap):
+            fields["ports"] = list(gap.ports)
+            ports = ", ".join(map(str, gap.ports))
+            reason = f"Gateway dropped {lost} trace records across ports {ports}"
+        else:
+            reason = f"Host capture buffer dropped {lost} records"
         self.publish(
             "system",
             "gap",
             "Capture gap",
-            fields={"dropped": lost},
+            fields=fields,
             quality="info",
             notice=f"Capture gap: {lost} records lost",
-            reason=f"Host capture buffer dropped {lost} records",
+            reason=reason,
+            **detail,
         )
 
     def observe(self, frame: NativeFrame, decoded: Values) -> str:
