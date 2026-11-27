@@ -3,6 +3,7 @@ import { trafficPanel } from "./traffic.js";
 import { parameters as facts, thermostatSummary } from "./parameters.js";
 import { deviceCard, instrument, tracePath, packet } from "./instruments.js";
 import { TraceTabs } from "./traces.js";
+import { additionalDeviceKeys, inventoryPaths } from "./endpoints.js";
 import { ClientInspector } from "./client-trace.js";
 import { wireDiagram } from "./wire.js";
 const $ = (q, root = document) => root.querySelector(q);
@@ -398,27 +399,19 @@ function showCards(peers) {
       },
     );
   }
-  function matchesDevice(p, d) {
-    return (
-      p.node != null &&
-      p.port === d.port &&
-      p.address === d.address &&
-      p.model != null &&
-      p.model === d.model
-    );
-  }
+  const paths = inventoryPaths(shown.devices, shown.peers);
   for (const d of devices) {
     const r = shown.device_details[d.key],
-      p = peers.find((p) => matchesDevice(p, d));
+      p = paths.get(d.key);
     append(
       { ...d, temperature_f: d.temperature_f ?? p?.temperature_f },
       thermostatSummary(r?.settings, p),
       () => deviceDetails(d.address),
     );
   }
+  const additional = additionalDeviceKeys(paths, shown.peers);
   for (const p of peers) {
-    if ((!p.model && !p.family) || devices.some((d) => matchesDevice(p, d)))
-      continue;
+    if (!additional.has(p.key)) continue;
     append(p, thermostatSummary({}, p), () =>
       peerDetails(shown.peers.find((row) => row.key === p.key) || p),
     );

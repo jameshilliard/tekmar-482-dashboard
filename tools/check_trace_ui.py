@@ -10,6 +10,36 @@ from pathlib import Path
 from playwright.sync_api import Page, expect, sync_playwright
 
 
+def check_inventory_paths(page: Page) -> None:
+    results = page.evaluate("""async () => {
+        const {additionalDeviceKeys, inventoryPaths, Endpoints} = await import('/static/endpoints.js');
+        const local = {key:'0:08:02', port:0, subnet:8, node:2, address:23,
+                       family:'thermostat', model:'530', temperature_f:67};
+        const device = {...local, key:'tha:23'};
+        const copy = {...local, key:'3:08:02', port:3, address:3023, temperature_f:null};
+        const controller = {...copy, family:'reset_control', node:31, model:'400', key:'3:08:1F'};
+        const cases = [
+            [[], [copy], [copy.key]],
+            [[device], [local, copy, controller], [controller.key]],
+            [[device], [local, {...copy, subnet:16, key:'3:10:02'}], ['3:10:02']],
+            [[device], [local, {...copy, model:'531'}], [copy.key]],
+            [[device], [local, {...copy, temperature_f:0}], [copy.key]],
+            [[device], [local, {...copy, calling:false}], [copy.key]],
+            [[device, {...copy, key:'tha:3023'}], [local, copy], []],
+            [[device], [local, {...local, subnet:16, key:'0:10:02'}, copy],
+                [local.key, '0:10:02', copy.key]],
+        ];
+        const chooser = new Endpoints(document.createElement('select'), () => {});
+        chooser.update([device], [local, copy]);
+        return [chooser.canonical(local.key) === device.key, chooser.canonical(copy.key) === copy.key,
+            ...cases.map(([devices,peers,expected]) => {
+                const keys = additionalDeviceKeys(inventoryPaths(devices,peers),peers);
+                return keys.size === expected.length && expected.every(k => keys.has(k));
+            })];
+    }""")
+    assert all(results), results
+
+
 def check(page: Page, url: str, screenshots: Path | None) -> None:
     failures = []
     page.on("pageerror", lambda err: failures.append(str(err)))
@@ -117,6 +147,7 @@ def check(page: Page, url: str, screenshots: Path | None) -> None:
     page.locator('button[data-view="devices"]').click()
     card = page.locator('.device-record[data-device^="tha:"]:has(.thermo)').first
     card.wait_for(timeout=120_000)
+    check_inventory_paths(page)
     assert not page.locator("#device-cards .parameters").count()
     page.locator('[data-device="gateway"] .instrument').click()
     modal.get_by_role("heading", name="Gateway configuration").wait_for()

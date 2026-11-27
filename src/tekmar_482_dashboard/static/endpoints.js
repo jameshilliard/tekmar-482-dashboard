@@ -4,6 +4,48 @@ const pathLabel = (key) =>
   key.startsWith("tha:")
     ? "tHA " + key.slice(4)
     : "Bus " + key.replace(":", " · ");
+
+export function inventoryPaths(devices, peers) {
+  const paths = new Map();
+  for (const d of devices) {
+    const matches = peers.filter(
+      (p) =>
+        p.node != null &&
+        p.port === d.port &&
+        p.address === d.address &&
+        p.model != null &&
+        p.model === d.model,
+    );
+    if (matches.length === 1) paths.set(d.key, matches[0]);
+  }
+  return paths;
+}
+
+export function additionalDeviceKeys(paths, peers) {
+  const indexed = [...paths.values()];
+  return new Set(
+    peers
+      .filter((p) => {
+        if ((!p.model && !p.family) || indexed.includes(p)) return false;
+        // A repeated configuration report is a trace source, not another control.
+        return !(
+          p.family === "thermostat" &&
+          p.model != null &&
+          p.node != null &&
+          p.temperature_f == null &&
+          p.calling == null &&
+          indexed.some(
+            (q) =>
+              q.port !== p.port &&
+              q.subnet === p.subnet &&
+              q.node === p.node &&
+              q.model === p.model,
+          )
+        );
+      })
+      .map((p) => p.key),
+  );
+}
 export class Endpoints {
   constructor(select, onChange) {
     this.select = select;
@@ -32,17 +74,8 @@ export class Endpoints {
       ]),
     );
     this.aliases.clear();
-    for (const d of devices) {
-      const matches = peers.filter(
-        (p) =>
-          p.node != null &&
-          p.port === d.port &&
-          p.address === d.address &&
-          p.model &&
-          p.model === d.model,
-      );
-      if (matches.length === 1) this.aliases.set(matches[0].key, d.key);
-    }
+    for (const [key, p] of inventoryPaths(devices, peers))
+      this.aliases.set(p.key, key);
     const old = this.select.value;
     this.select.replaceChildren(new Option("All devices", ""));
     for (const d of list
