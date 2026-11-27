@@ -193,6 +193,7 @@ SIMPLE: dict[str, tuple[Field, ...]] = {
         flags("Access", ("Request", 1), ("Open", 1), ("Unmapped", 6)),
     ),
     "SetpointRemoteEnable": ("group_id", "enable"),
+    "SceneReport": ("scene", ("duration_minutes", 2)),
     "SetpointEnableReport": (
         "group_id",
         flags(

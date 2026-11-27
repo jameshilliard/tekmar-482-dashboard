@@ -59,6 +59,13 @@ class FeedTests(unittest.TestCase):
     def test_normal_transfer_headers_and_embedded_native_bytes(self) -> None:
         for wire, last, quality in (
             ("0401f04b54 020005bf01", "Feature flags: 447", "good"),
+            ("0012f04b54 03df03", "NetworkInitRequest: 0x3DF", "good"),
+            ("0012f04b54 03ff02 07e001", "tN4 payload", "good"),
+            ("0312f04b54 031f02 0401", "tN4 payload", "good"),
+            ("0012f04b54 03ff02", "SceneReport: 0x2FF", "error"),
+            ("0212f04b54 0301", "TX: No ACK", "good"),
+            ("0212f04b54 03ff", "TX: Expired before send", "good"),
+            ("0212f04b54 03fc", "TX: 0xfc", "partial"),
             ("010ff04b54 02120103000000", "Selector: 0", "good"),
             (
                 "0011f04b54 02120103000000 0703010409000409",

@@ -5,8 +5,11 @@ from __future__ import annotations
 from tekmar_482 import (
     ErrorReason,
     ErrorSource,
+    FailureReason,
     GatewayErrorCounter,
+    NativeAddress,
     NativeFrame,
+    NativeMessage,
     Packet,
     ProtocolError,
     TrpcMethod,
@@ -260,6 +263,57 @@ def embedded_frame(port: int, part: bytes) -> Span:
     return item
 
 
+def announcement_spans(message: TrpcPacket) -> list[Span] | None:
+    data = message.extra
+    if not data:
+        return None
+    port = span(data[:1], f"Bus: {data[0]}", "field")
+    if message.service is TrpcService.REPORT and len(data) == 2:
+        code = data[1]
+        name = {
+            0: "Link ACK",
+            0xFE: "TX pin unavailable",
+            0xFF: "Expired before send",
+        }.get(code)
+        if code in FailureReason:
+            name = (
+                FailureReason(code).name.replace("_", " ").title().replace("Ack", "ACK")
+            )
+        return [
+            port,
+            span(data[1:], f"TX: {name or hex(code)}", "field" if name else "unknown"),
+        ]
+    if (
+        message.service not in {TrpcService.UPDATE, TrpcService.RESPONSE_UPDATE}
+        or len(data) < 3
+    ):
+        return None
+    native_id = int.from_bytes(data[1:3], "little")
+    try:
+        msg = NativeMessage(native_id, NativeAddress(0, 0), data[3:])
+        frame = NativeFrame(data[0], 0, msg.to_bytes())
+    except ValueError:
+        return None
+    result = [
+        port,
+        span(
+            data[1:3],
+            f"{msg.name or 'Native ID'}: 0x{native_id:03X}",
+            "field" if msg.name else "unknown",
+        ),
+    ]
+    # The UART carries the announcement data, not a native frame header.
+    meaning = frame.decoded
+    _, payload = native_spans(frame, meaning)
+    quality, _ = native_quality(frame, meaning, payload)
+    if quality != "good":
+        annotated = payload if msg.payload else result[-1]
+        annotated["coverage"] = "invalid" if quality == "error" else "unknown"
+    if msg.payload:
+        result.append(payload)
+    return result
+
+
 def trpc_spans(packet: Packet, message: TrpcPacket) -> list[Span]:
     raw = packet.data
     name = message.method_name or (
@@ -275,6 +329,10 @@ def trpc_spans(packet: Packet, message: TrpcPacket) -> list[Span]:
         result[0]["coverage"] = "unknown"
     if message.method_name is None and message.method_id not in BridgeMethod:
         result[1]["coverage"] = "unknown"
+    if message.method_id == BridgeMethod.NORMAL_ANNOUNCE and (
+        parts := announcement_spans(message)
+    ):
+        return [*result, *parts]
     offset = 5
     spec = method_spec(message.method_id)
     if spec:
