@@ -101,6 +101,52 @@ class CompatibilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(reply["elapsed_ms"])
             self.assertFalse(report["requests"])
 
+    async def test_devices_receive_only_methods_the_upstream_class_handles(
+        self,
+    ) -> None:
+        def identity(address: int, code: int) -> Packet:
+            return packet(
+                "060497010000"
+                + (address.to_bytes(2, "little") + code.to_bytes(4, "little")).hex()
+            )
+
+        # The dashboard can identify devices before a client connects.
+        self.server.publish(identity(1, 105801))
+        self.server.publish(identity(2, 107201))
+        self.server.publish(identity(3, 101101))
+        reader, writer = await self.connect()
+        captured: list[Packet] = []
+        with self.client.session.observe_received_packets(captured.append):
+            writer.write(b"06017F010000010000\n06017F010000020000\n")
+            self.assertEqual(await self.wire.tx.get(), packet("06017f010000020000"))
+            hidden = [
+                "06047F0100000100FF",
+                "06027F010000010002",
+                "060277010000010004",
+                "06027F0100000300FF",
+                "06023E0100000200049205",
+            ]
+            visible = [
+                "06047F010000020001",
+                "0602370100000200AE05",
+                "06022F010000010001",
+                "06023E0100000300049205",
+            ]
+            for line in [*hidden, *visible]:
+                self.wire.queue_packet(packet(line))
+            for line in visible:
+                self.assertEqual(await reader.readline(), line.encode() + b"\n")
+            self.assertEqual(captured, list(map(packet, [*hidden, *visible])))
+        self.wire.queue_packet(packet("06025F01000001000400"))
+        self.wire.queue_packet(identity(1, 107201))
+        self.wire.queue_packet(packet("06027F010000010002"))
+        for expected in [
+            packet("06025F01000001000400"),
+            identity(1, 107201),
+            packet("06027F010000010002"),
+        ]:
+            self.assertEqual(packet((await reader.readline()).decode()), expected)
+
     async def test_filters_both_ways_without_disabling_diagnostics_or_rewriting(
         self,
     ) -> None:

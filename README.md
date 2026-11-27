@@ -56,9 +56,13 @@ Enable it only for trusted clients: their stock updates can change real
 device settings. The upstream 0.9.34 integration also sends a periodic
 DateTime update; a passive test installation must suppress its timekeeper.
 
-In Normal mode, every peer sees the gateway's original stock tRPC replies
-and reports, including replies caused by other clients. Valid requests and
-updates are forwarded, not answered from a dashboard cache. ReportingState
+In Normal mode, every peer sees the gateway's original supported tRPC replies
+and reports, including replies caused by other clients. Once a device type is
+known the listener passes only the methods the upstream device class handles.
+For example, thermostat temperatures and setback events pass unchanged, but
+snow control setback events stay in the gateway trace; forwarding even an
+unavailable value to that class can terminate the upstream receive loop.
+Supported requests and updates are forwarded, not answered from a cache. ReportingState
 and SetbackEnable are real, shared gateway settings. Native frames, custom
 methods and diagnostic packets remain available to the dashboard only.
 Entering Raw mode, losing the gateway or running an exclusive operation

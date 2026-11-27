@@ -13,6 +13,8 @@ from time import monotonic, time
 from typing import Any
 
 from tekmar_482 import (
+    DEVICE_FEATURES,
+    DeviceKind,
     Packet,
     Tekmar482Client,
     TekmarError,
@@ -68,6 +70,31 @@ _GATEWAY = {
 _MAX_LINE = 2 * (1 + 255) + 2  # type + largest TPCK payload, with CRLF
 _OUTBOX = 256
 _MAX_PEERS = 16
+
+# The older client's runtime dispatch calls different setters on each class.
+_SETPOINT_FIELDS = {
+    TrpcMethod.ACTIVE_DEMAND,
+    TrpcMethod.CURRENT_TEMPERATURE,
+    TrpcMethod.CURRENT_FLOOR_TEMPERATURE,
+    TrpcMethod.SETPOINT_DEVICE,
+    TrpcMethod.SETBACK_STATE,
+}
+_DEVICE_FIELDS = _SETPOINT_FIELDS | {
+    TrpcMethod.SETBACK_EVENTS,
+    TrpcMethod.MODE_SETTING,
+    TrpcMethod.HEAT_SETPOINT,
+    TrpcMethod.COOL_SETPOINT,
+    TrpcMethod.SLAB_SETPOINT,
+    TrpcMethod.FAN_PERCENT,
+    TrpcMethod.RELATIVE_HUMIDITY,
+    TrpcMethod.HUMIDITY_SET_MIN,
+    TrpcMethod.HUMIDITY_SET_MAX,
+}
+_HANDLED_FIELDS = {
+    DeviceKind.SNOWMELT: {TrpcMethod.ACTIVE_DEMAND},
+    DeviceKind.SETPOINT: _SETPOINT_FIELDS,
+    DeviceKind.THERMOSTAT: _DEVICE_FIELDS - {TrpcMethod.SETPOINT_DEVICE},
+}
 
 
 def supported(packet: Packet, *, from_client: bool) -> TrpcMethod | None:
@@ -138,6 +165,7 @@ class Compatibility:
         self.recent: deque[ClientInfo] = deque(maxlen=16)
         self.traces: dict[int, ClientTrace] = {}
         self.total = 0
+        self._kinds: dict[int, DeviceKind] = {}
 
     async def start(self) -> None:
         if self.port is not None:
@@ -164,6 +192,7 @@ class Compatibility:
                 yield
         finally:
             self.client = None
+            self._kinds.clear()
             self.disconnect("Normal gateway connection ended")
 
     def disconnect(self, reason: str) -> None:
@@ -193,17 +222,53 @@ class Compatibility:
             ],
         }
 
+    def _accept_field(self, method: TrpcMethod, packet: Packet) -> bool:
+        if method not in _DEVICE_FIELDS:
+            return True
+        address = int.from_bytes(packet.data[5:7], "little")
+        kind = self._kinds.get(address)
+        return kind is None or method in _HANDLED_FIELDS.get(kind, set())
+
+    def _observe_identity(self, method: TrpcMethod, message: TrpcPacket) -> None:
+        if method is TrpcMethod.DEVICE_TYPE:
+            address, code = message.get("address"), message.get("type")
+            if address is not None and code is not None:
+                if feature := DEVICE_FEATURES.get(code):
+                    self._kinds[address] = feature.kind
+                else:
+                    self._kinds.pop(address, None)
+        elif method is TrpcMethod.TAKING_ADDRESS:
+            for name in ("old_address", "new_address"):
+                if (address := message.get(name)) is not None:
+                    self._kinds.pop(address, None)
+        elif (
+            method is TrpcMethod.DEVICE_INVENTORY
+            and message.service == TrpcService.RESPONSE_UPDATE
+        ):
+            if address := message.get("address"):
+                self._kinds.pop(address, None)
+            else:
+                self._kinds.clear()
+
     def publish(self, packet: Packet) -> None:
-        if not self.peers:
-            return
         method = supported(packet, from_client=False)
         if method is None:
+            return
+        if not self.peers and method not in {
+            TrpcMethod.DEVICE_TYPE,
+            TrpcMethod.TAKING_ADDRESS,
+            TrpcMethod.DEVICE_INVENTORY,
+        }:
+            return
+        msg = TrpcPacket.from_packet(packet)
+        self._observe_identity(method, msg)
+        if not self.peers or not self._accept_field(method, packet):
             return
         line = (bytes([packet.type]) + packet.data).hex().upper().encode(
             "ascii"
         ) + b"\n"
         name = TrpcService(packet.data[0]).name + " " + method.name
-        msg, now = TrpcPacket.from_packet(packet), monotonic()
+        now = monotonic()
         candidates = {
             p.info.id: p.trace.candidates(msg, now)
             for p in self.peers.values()
@@ -284,7 +349,11 @@ class Compatibility:
             packet = Packet(raw[0], raw[1:]) if 0 < len(raw) <= 256 else None
             method = supported(packet, from_client=True) if packet else None
             peer.info.activity = time()
-            if packet is None or method is None:
+            if (
+                packet is None
+                or method is None
+                or not self._accept_field(method, packet)
+            ):
                 peer.info.filtered += 1
                 peer.trace.record("filtered", packet)
                 self.changed()
