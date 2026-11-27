@@ -8,7 +8,6 @@ from contextlib import AsyncExitStack, suppress
 from typing import Any
 
 from tekmar_482 import (
-    BridgeClient,
     BridgeFeature,
     BridgeManagement,
     BridgeMode,
@@ -23,6 +22,7 @@ from tekmar_482 import (
     Packet,
     ProtocolError,
     RxFlag,
+    StockFirmwareError,
     Tekmar482Client,
     TraceRx,
     TraceTx,
@@ -30,7 +30,6 @@ from tekmar_482 import (
     TrpcMethod,
     TrpcPacket,
     TrpcService,
-    open_gateway,
 )
 from tekmar_482.packet import TYPE_NORMAL_TRACE, TYPE_TN4, TYPE_TRPC
 from tekmar_482.raw import InvalidCapture, PortError, TxResult, decode_raw_packet
@@ -41,6 +40,7 @@ from .compat import Compatibility
 from .devices import Inventory
 from .endpoints import native_endpoints, trpc_endpoints
 from .feed import Feed, Row, data
+from .firmware_watch import managed_gateway
 from .identity import identify_sources
 from .native_layout import native_spans
 from .trace_view import native_quality, trpc_view
@@ -65,6 +65,7 @@ class Gateway:
             errors,
         )
         self.trace_ports = tuple(range(5))
+        self.allow_stock = vendor
         self.ack_ports: tuple[int, ...] = ()
         self.error_sources = tuple(ErrorSource)
         self.feed = Feed()
@@ -106,22 +107,24 @@ class Gateway:
                 async with AsyncExitStack() as stack:
                     self.feed.reset_sources()
                     self.inventory = Inventory(self.feed)
-                    if self.vendor:
-                        stock = await stack.enter_async_context(
-                            open_gateway(self.endpoint, vendor=True)
-                        )
-                        assert isinstance(stock, Tekmar482Client)
-                        await self._normal(stack, stock, BridgeFeature(0))
-                    else:
-                        wire = await stack.enter_async_context(self.endpoint.connect())
-                        if self.mode == "raw":
-                            stack.enter_context(
-                                observe_bridge_packets(
-                                    lambda p, tx: self._wire(p, tx, captures=False)
-                                )
+                    if self.mode == "raw":
+                        stack.enter_context(
+                            observe_bridge_packets(
+                                lambda p, tx: self._wire(p, tx, captures=False)
                             )
-                        bridge = BridgeClient(wire)
-                        await bridge.identify()
+                        )
+                    app = await stack.enter_async_context(
+                        managed_gateway(
+                            self.endpoint, self.allow_stock, self._firmware_status
+                        )
+                    )
+                    self.vendor = isinstance(app, Tekmar482Client)
+                    self.feed.status["firmware"] = "Stock" if self.vendor else "Custom"
+                    if isinstance(app, Tekmar482Client):
+                        self.feed.status.update(revision=None, features=[], panel=None)
+                        await self._normal(stack, app, BridgeFeature(0))
+                    else:
+                        bridge = app
                         revision = await bridge.revision()
                         self.feed.status["panel"] = data(await bridge.panel())
                         async with bridge.normal(select_mode=False) as control:
@@ -165,6 +168,14 @@ class Gateway:
                 raise ConnectionError("Gateway stream ended")
             except asyncio.CancelledError:
                 raise
+            except StockFirmwareError:
+                self.feed.state(
+                    "Waiting for manual update mode",
+                    connection="offline",
+                    trace=False,
+                    errors=False,
+                    problem=None,
+                )
             except Exception as err:
                 self.feed.state(
                     "Gateway unavailable",
@@ -177,6 +188,21 @@ class Gateway:
                 self.client = self.raw = self.diagnostics = self.traffic = None
             await asyncio.sleep(delay)
             delay = min(15, delay * 2)
+
+    def _firmware_status(self, state: str, message: str) -> None:
+        self.feed.state(message, firmware_update=state)
+
+    async def _watch_stock_link(self, client: Tekmar482Client) -> None:
+        # A power cycle does not disconnect an independently powered USB adapter.
+        while True:
+            await asyncio.sleep(15)
+            if (
+                await client.request_response(TrpcMethod.PROTOCOL_VERSION, timeout=5)
+                is None
+            ):
+                raise ConnectionError(
+                    "Stock gateway stopped responding; checking boot mode"
+                )
 
     async def _normal(
         self, stack: AsyncExitStack, client: Tekmar482Client, flags: BridgeFeature
@@ -204,11 +230,18 @@ class Gateway:
                 else None
             )
             self.scan = tasks.create_task(self.inventory.watch(client))
+            stock_link = (
+                tasks.create_task(self._watch_stock_link(client))
+                if self.vendor
+                else None
+            )
             try:
                 await self._capture(stack, self._normal_frames(trace), traced=has_trace)
             finally:
                 self.scan.cancel()
                 self.scan = None
+                if stock_link:
+                    stock_link.cancel()
                 if identify is not None:
                     identify.cancel()
 

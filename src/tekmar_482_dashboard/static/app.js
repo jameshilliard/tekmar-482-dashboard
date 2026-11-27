@@ -201,6 +201,19 @@ function spark(canvas, activity) {
 function render() {
   if (!paused) shown = state;
   const st = state.status;
+  const fw = st.firmware_update;
+  const manual = fw === "manual",
+    noImage = fw === "missing_image" || fw === "stock_missing_image";
+  $("#firmware-warning").hidden = !connected || !(manual || noImage);
+  $("#firmware-steps").hidden = !(manual || fw === "stock_missing_image");
+  $("#firmware-warning-title").textContent = manual
+    ? "Stock firmware detected: put the 482 in update mode"
+    : fw === "stock_missing_image"
+      ? "Stock firmware detected: install the firmware image first"
+      : "Automatic firmware updates unavailable";
+  $("#firmware-warning-text").textContent = manual
+    ? "The stock firmware cannot enter the bootloader by command. tekmarshark will install the bundled firmware when it detects update mode."
+    : "Install the tekmar-482 client from a firmware-bearing source distribution before putting the 482 in update mode.";
   $("#connection").textContent = connected
     ? st.connection === "online"
       ? "Gateway online"
@@ -697,6 +710,7 @@ async function peerDetails(p) {
   }
 }
 function renderClients(c) {
+  clientInspector.update(c);
   const live = c?.active ?? [],
     recent = c?.recent ?? [];
   $("#client-listener").textContent = !connected
@@ -710,7 +724,6 @@ function renderClients(c) {
     ? `TCP · ${c.host.includes(":") ? "[" + c.host + "]" : c.host}:${c.port}`
     : "";
   $("#client-active").textContent = number(live.length);
-  clientInspector.update(c);
   $("#client-total").textContent = number(c?.total ?? 0);
   const label = (s) => (s ? tidy(s.toLowerCase()) : null);
   rows(
@@ -728,12 +741,6 @@ function renderClients(c) {
       label(p.last_reply),
       p.activity ? stamp(p.activity) : null,
     ],
-  );
-}
-
-function renderDiagnostics() {
-  const st = state.status,
-    facts = $("#facts");
     (p) => clientInspector.choose(p.id),
   );
   rows(
@@ -749,6 +756,12 @@ function renderDiagnostics() {
       p.reason,
     ],
     (p) => clientInspector.choose(p.id),
+  );
+}
+
+function renderDiagnostics() {
+  const st = state.status,
+    facts = $("#facts");
   if (st.connection === "online") {
     const settings = JSON.stringify([
       st.mode,

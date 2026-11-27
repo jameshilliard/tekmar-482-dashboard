@@ -769,3 +769,22 @@ dialog input[name="key"] {
     font-size: 0.85rem;
   }
 }
+.firmware-warning:not([hidden]) {
+  display: flex;
+  gap: 1rem;
+  border-inline-start: 0.35rem solid #ae6200;
+  background: #fff0c6;
+  color: #513500;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.firmware-warning strong {
+  font-size: 1.12rem;
+}
+.firmware-warning p,
+.firmware-warning ol {
+  margin: 0.4rem 0 0;
+}
+.firmware-warning ol {
+  padding-inline-start: 1.4rem;
+}

@@ -72,7 +72,7 @@ def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
                 await gateway.stop()
 
     app = FastAPI(
-        title="Tekmar 482 / tN4 console",
+        title="tekmarshark",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,

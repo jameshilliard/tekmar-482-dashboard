@@ -1,4 +1,4 @@
-# tekmar 482 dashboard
+# tekmarshark
 
 A local FastAPI/WebSocket instrument console for the tekmar 482. Run it on the
 machine connected to the gateway. Browsers share one gateway connection.
@@ -18,6 +18,25 @@ TCP requires a transparent serial bridge set to the same baud rate as
 `--baudrate`; the 482 itself has an RS-232 port. No external packet service
 is needed. The custom firmware is the default. Use `--vendor` to monitor
 stock tRPC without native tracing or gateway error counters.
+
+On every connection the dashboard checks the build bundled with the Python
+client. It leaves a matching gateway alone, updates an older custom build,
+and provisions a positively identified LPC2146 bootloader. Stock firmware
+cannot request that handoff: the dashboard displays the
+[official Test-button procedure](https://www.watts.com/our-story/brands/tekmar/482firmware)
+and retries automatically. With `--vendor` it can monitor stock tRPC until
+the operator puts the gateway into update mode. A source checkout without a
+bundled image can monitor but cannot flash.
+
+For a dashboard checkout using the Git dependency, install a firmware-bearing
+client sdist into the dashboard environment, then run the installed command
+directly so a project sync does not replace it with an image-less Git wheel:
+
+```sh
+uv sync --frozen --extra serial
+uv pip install --no-deps --reinstall /path/to/tekmar_482-0.1.0.tar.gz
+.venv/bin/tekmar-482-dashboard --serial /dev/ttyUSB0
+```
 
 ## Compatibility clients
 
@@ -46,6 +65,11 @@ Entering Raw mode, losing the gateway or running an exclusive operation
 disconnects these clients; no buffered command is replayed on reconnect.
 The **Clients** tab shows the listener, active peers, directional counts,
 filtered input, recent activity and the last 16 disconnects.
+Select a connection for its own bounded, directional tHA history. The
+decoder is the same one used for the gateway's tRPC trace; TCP hex records
+do not have the UART framing or checksum. A compatible reply is a candidate,
+not an acknowledgement of a particular client action. Unsolicited reports
+and replies shared by other clients are shown as such.
 
 ## Monitor
 
@@ -65,11 +89,6 @@ Open a device icon for its complete configuration and available controls.
 Diagnostics and device dialogs can read the gateway's own 64-bit traffic
 counters. These keep counting with no connected browser or host. Port totals
 include invalid RX and non-addressed TX; device totals include valid RX and
-Select a connection for its own bounded, directional tHA history. The
-decoder is the same one used for the gateway's tRPC trace; TCP hex records
-do not have the UART framing or checksum. A compatible reply is a candidate,
-not an acknowledgement of a particular client action. Unsolicited reports
-and replies shared by other clients are shown as such.
 explicitly unicast block TX, split by link outcome. Counts restart at boot.
 
 Protocol fields occupy fixed columns. Open a frame for one nested, wire-order

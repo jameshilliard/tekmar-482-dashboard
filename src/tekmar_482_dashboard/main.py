@@ -87,7 +87,7 @@ def main() -> None:
         endpoint,
         vendor=args.vendor,
         mode=args.mode,
-        errors=args.errors if args.errors is not None else not args.vendor,
+        errors=args.errors if args.errors is not None else True,
         compat_host=args.compat_host or args.host,
         compat_port=args.compat_port,
     )

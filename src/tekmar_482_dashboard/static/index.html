@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Linewatch | tekmar 482</title>
+    <title>tekmarshark | tekmar 482</title>
     <link rel="icon" href="/static/icons/audio-waveform.svg" />
     <link rel="stylesheet" href="/static/app.css" />
     <link rel="stylesheet" href="/static/console.css" />
@@ -13,7 +13,7 @@
     <header class="rail">
       <div class="brand">
         <span class="brand-icon"><i data-icon="audio-waveform"></i></span>
-        <div><b>Linewatch</b><small>TEKMAR 482</small></div>
+        <div><b>tekmarshark</b><small>TEKMAR 482</small></div>
       </div>
       <nav aria-label="Workspace">
         <button data-page="monitor" class="selected">
@@ -51,6 +51,32 @@
         </button>
       </header>
       <div class="content">
+        <aside
+          id="firmware-warning"
+          class="firmware-warning"
+          role="alert"
+          hidden
+        >
+          <i data-icon="circuit-board"></i>
+          <div>
+            <strong id="firmware-warning-title"></strong>
+            <p id="firmware-warning-text"></p>
+            <ol id="firmware-steps" hidden>
+              <li>
+                Switch off power to the 482. Leave its serial cable connected.
+              </li>
+              <li>
+                Hold down <b>Test</b> on the 482 and restore power while holding
+                it.
+              </li>
+              <li>
+                Release <b>Test</b> when both <b>Power</b> and <b>Tx</b> are
+                lit. Leave power and serial connected until the automatic update
+                finishes.
+              </li>
+            </ol>
+          </div>
+        </aside>
         <div class="heading">
           <div>
             <div class="eyebrow"><span class="dash"></span>GATEWAY CONSOLE</div>
@@ -335,32 +361,6 @@
               <tbody id="client-history"></tbody>
             </table>
           </div>
-        </section>
-        <section id="operations" hidden>
-          <div class="op-tabs segments">
-            <button data-operation="climate" aria-pressed="true">
-              Thermostat</button
-            ><button data-operation="trpc">tRPC</button
-            ><button data-operation="raw">Raw Send</button
-            ><button data-operation="catalog">Client tools</button>
-          </div>
-          <section id="climate" class="work-form">
-            <h2>Thermostat controls</h2>
-            <label>Device<select id="climate-device"></select></label>
-            <div id="climate-settings"></div>
-          </section>
-          <form id="trpc" class="work-form" hidden>
-            <h2>tRPC transaction</h2>
-            <div class="formrow">
-              <label
-                >Service<select name="service">
-                  <option value="request">Request</option>
-                  <option value="update">Update</option>
-                </select></label
-              ><label>Method<select name="method"></select></label>
-            </div>
-            <div id="trpc-fields" class="formrow"></div>
-            <button>Send transaction</button>
           <div class="section-head client-trace-head">
             <h2>Client tHA trace</h2>
             <label class="device-filter"
@@ -394,6 +394,32 @@
               <tbody></tbody>
             </table>
           </div>
+        </section>
+        <section id="operations" hidden>
+          <div class="op-tabs segments">
+            <button data-operation="climate" aria-pressed="true">
+              Thermostat</button
+            ><button data-operation="trpc">tRPC</button
+            ><button data-operation="raw">Raw Send</button
+            ><button data-operation="catalog">Client tools</button>
+          </div>
+          <section id="climate" class="work-form">
+            <h2>Thermostat controls</h2>
+            <label>Device<select id="climate-device"></select></label>
+            <div id="climate-settings"></div>
+          </section>
+          <form id="trpc" class="work-form" hidden>
+            <h2>tRPC transaction</h2>
+            <div class="formrow">
+              <label
+                >Service<select name="service">
+                  <option value="request">Request</option>
+                  <option value="update">Update</option>
+                </select></label
+              ><label>Method<select name="method"></select></label>
+            </div>
+            <div id="trpc-fields" class="formrow"></div>
+            <button>Send transaction</button>
           </form>
           <form id="raw" class="work-form" hidden>
             <h2>Raw tN4 transmission</h2>
