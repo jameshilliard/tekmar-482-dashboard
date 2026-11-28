@@ -330,6 +330,7 @@ class Gateway:
         *,
         observed: bool,
         prefix: list[Span],
+        trailer: list[Span] | None = None,
         **meta: Any,
     ) -> None:
         decoded = frame.decoded
@@ -342,6 +343,21 @@ class Gateway:
             self.inventory.observed_device(key)
         header, payload = native_spans(frame, decoded)
         quality, why = native_quality(frame, decoded, payload)
+        if frame.rx_flags is not None:
+            meta.update(
+                ack=bool(frame.rx_flags & RxFlag.ACK),
+                early_start=bool(frame.rx_flags & RxFlag.EARLY_START),
+            )
+            flags = field(1, "RX flags", "envelope")
+            flags["bits"] = [
+                {"hi": 7, "lo": 2, "label": "Reserved"},
+                {"hi": 1, "lo": 1, "label": "Early start"},
+                {"hi": 0, "lo": 0, "label": "ACK"},
+            ]
+            trailer = [flags]
+        parts = [group("Record", prefix, column="record"), header, payload]
+        if trailer:
+            parts.append(group("Metadata", trailer, column="record"))
         if meta.get("outcome") not in (None, "ack"):
             meta["notice"] = "Gateway transmit: " + str(meta["outcome"]).replace(
                 "_", " "
@@ -373,10 +389,7 @@ class Gateway:
             reason=why,
             **diagram(
                 packet,
-                group(
-                    "Payload · " + kind,
-                    [group("Record", prefix, column="record"), header, payload],
-                ),
+                group("Payload · " + kind, parts),
                 literal_header=packet.type == TYPE_TN4,
             ),
             **meta,
@@ -567,48 +580,35 @@ class Gateway:
                 self._wire(packet, event.outbound)
                 continue
             sample = event.decoded
-            if isinstance(sample, (TraceRx, TraceTx)):
+            if isinstance(sample, TraceRx):
                 frame = sample.frame
-                rx = isinstance(sample, TraceRx)
-                prefix = self._prefix(
-                    "RX" if rx else "TX attempt", frame.port, frame.timestamp_ms
-                )
-                meta: Row = {
-                    "gateway_ms": frame.timestamp_ms,
-                    "host_monotonic_ns": stamp,
-                }
-                if isinstance(sample, TraceRx):
-                    meta.update(
-                        ack=bool(sample.flags & RxFlag.ACK),
-                        early_start=bool(sample.flags & RxFlag.EARLY_START),
-                    )
-                    flags = field(1, "RX flags", "envelope")
-                    flags["bits"] = [
-                        {"hi": 7, "lo": 2, "label": "Reserved"},
-                        {"hi": 1, "lo": 1, "label": "Early start"},
-                        {"hi": 0, "lo": 0, "label": "ACK"},
-                    ]
-                    prefix.append(flags)
-                else:
-                    meta.update(
-                        origin=data(sample.origin),
-                        outcome=data(sample.failure)
-                        if sample.failure is not None
-                        else "ack",
-                    )
-                    prefix.extend(
-                        [
-                            field(1, f"Origin: {meta['origin']}", "envelope"),
-                            field(1, f"Outcome: {meta['outcome']}", "envelope"),
-                        ]
-                    )
                 self._native(
                     packet,
                     frame,
-                    "rx" if rx else "tx",
-                    observed=rx and not meta.get("early_start"),
-                    prefix=prefix,
-                    **meta,
+                    "rx",
+                    observed=not bool(sample.flags & RxFlag.EARLY_START),
+                    prefix=self._prefix("RX", frame.port, frame.timestamp_ms),
+                    gateway_ms=frame.timestamp_ms,
+                    host_monotonic_ns=stamp,
+                )
+            elif isinstance(sample, TraceTx):
+                frame = sample.frame
+                origin = data(sample.origin)
+                outcome = data(sample.failure) if sample.failure is not None else "ack"
+                self._native(
+                    packet,
+                    frame,
+                    "tx",
+                    observed=False,
+                    prefix=self._prefix("TX attempt", frame.port, frame.timestamp_ms),
+                    trailer=[
+                        field(1, f"Origin: {origin}", "envelope"),
+                        field(1, f"Outcome: {outcome}", "envelope"),
+                    ],
+                    origin=origin,
+                    outcome=outcome,
+                    gateway_ms=frame.timestamp_ms,
+                    host_monotonic_ns=stamp,
                 )
             elif isinstance(sample, InvalidCapture):
                 self._invalid(packet, sample, host_monotonic_ns=stamp)
@@ -672,8 +672,11 @@ class Gateway:
                 prefix = bytes((0, record.port)) + record.timestamp_ms.to_bytes(
                     4, "little"
                 )
+                trailer = (
+                    bytes((record.rx_flags,)) if record.rx_flags is not None else b""
+                )
                 self._native(
-                    Packet(TYPE_TN4, prefix + record.body),
+                    Packet(TYPE_TN4, prefix + record.body + trailer),
                     record,
                     "rx",
                     observed=True,

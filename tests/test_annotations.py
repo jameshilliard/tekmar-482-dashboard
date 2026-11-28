@@ -201,6 +201,18 @@ class AnnotationTests(unittest.TestCase):
             [(1, "Mode: Raw"), (1, "Raw extensions: Off")],
         )
 
+    def test_raw_rx_trailing_flags_stay_out_of_native_body(self) -> None:
+        gateway = Gateway(ENDPOINT)
+        body = bytes.fromhex("00 02 01000000 12300001 35 03")
+        gateway._wire(Packet(1, body), False, literal_header=True)
+        row = gateway.feed.events[-1]
+        self.assertTrue(row["ack"])
+        self.assertTrue(row["early_start"])
+        self.assertEqual(row["hex"], "1230000135")
+        self.assertEqual(row["escapes"], [13])
+        field = row["layout"][3]["children"][-1]["children"][0]
+        self.assertEqual((field["label"], field["end"]), ("RX flags", 16))
+
     def test_truncated_uart_packet_is_visible_as_an_error(self) -> None:
         gateway = Gateway(ENDPOINT)
         packet = Packet(6, b"\x01")

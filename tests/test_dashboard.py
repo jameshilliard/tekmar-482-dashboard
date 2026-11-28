@@ -332,7 +332,7 @@ class DeviceTests(unittest.IsolatedAsyncioTestCase):
         trace = NormalTrace(4)
         count = (1 << 63) + 5
         for body in (
-            bytes.fromhex("00 02 01000000 01 76f00608 00032b0a06000000"),
+            bytes.fromhex("00 02 01000000 76f00608 00032b0a06000000 01"),
             bytes.fromhex("05 14") + count.to_bytes(8, "little"),
             bytes.fromhex("05 00 0100000000000000"),
         ):
@@ -341,6 +341,11 @@ class DeviceTests(unittest.IsolatedAsyncioTestCase):
         await gateway._normal_frames(trace)
         frame, gap, malformed = gateway.feed.events
         self.assertEqual(frame["port"], 2)
+        self.assertTrue(frame["ack"])
+        self.assertFalse(frame["early_start"])
+        self.assertEqual(
+            frame["layout"][3]["children"][-1]["children"][0]["label"], "RX flags"
+        )
         self.assertEqual(gap["fields"], {"dropped": str(count), "ports": [2, 4]})
         self.assertEqual(gap["quality"], "info")
         self.assertEqual(
