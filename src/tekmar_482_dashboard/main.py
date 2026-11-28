@@ -12,19 +12,19 @@ from .app import create_app
 from .gateway import Gateway
 
 
-def operator_key(path: Path) -> str:
+def operator_key(path: Path, label: str = "operator") -> str:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         if path.stat().st_mode & 0o077:
             raise ValueError(
-                "The operator key file must be private (chmod 600)"
+                f"The {label} key file must be private (chmod 600)"
             ) from None
         key = path.read_text().strip()
         if len(key) < 32:
             raise ValueError(
-                "The operator key must contain at least 32 characters"
+                f"The {label} key must contain at least 32 characters"
             ) from None
         return key
     key = secrets.token_urlsafe(32)
@@ -65,9 +65,22 @@ def main() -> None:
         type=Path,
         help="optionally require an operator key for commands (default unlocked)",
     )
+    parser.add_argument(
+        "--mcp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="serve read-only agent diagnostics at /mcp (default on)",
+    )
+    parser.add_argument(
+        "--mcp-key-file",
+        type=Path,
+        help="optionally require a separate diagnostics bearer key on /mcp",
+    )
     args = parser.parse_args()
     if args.compat_host and args.compat_port is None:
         parser.error("--compat-host requires --compat-port")
+    if args.mcp_key_file and not args.mcp:
+        parser.error("--mcp-key-file requires MCP to be enabled")
     if args.compat_port is not None and not 1 <= args.compat_port <= 65535:
         parser.error("--compat-port must be between 1 and 65535")
     if args.vendor and (args.errors or args.mode != "normal"):
@@ -92,7 +105,14 @@ def main() -> None:
         compat_port=args.compat_port,
     )
     uvicorn.run(
-        create_app(gateway, operator_key(args.key_file) if args.key_file else None),
+        create_app(
+            gateway,
+            operator_key(args.key_file) if args.key_file else None,
+            mcp_enabled=args.mcp,
+            mcp_token=operator_key(args.mcp_key_file, "MCP")
+            if args.mcp_key_file
+            else None,
+        ),
         host=args.host,
         port=args.port,
         access_log=False,

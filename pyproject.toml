@@ -10,7 +10,13 @@ readme = "README.md"
 license = "MIT"
 authors = [{ name = "James Hilliard" }]
 requires-python = ">=3.12"
-dependencies = ["fastapi>=0.115", "tekmar-482", "uvicorn>=0.32", "websockets>=14"]
+dependencies = [
+    "fastapi>=0.115",
+    "mcp>=2.3.0,<3",
+    "tekmar-482",
+    "uvicorn>=0.32",
+    "websockets>=14",
+]
 
 [project.optional-dependencies]
 serial = ["tekmar-482[serial]"]

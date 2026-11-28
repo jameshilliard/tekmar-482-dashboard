@@ -4,7 +4,7 @@ import asyncio
 import secrets
 import socket
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
@@ -20,7 +20,9 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.routing import Route
 from tekmar_482 import (
     DeviceMode,
     ErrorReason,
@@ -36,6 +38,7 @@ from tekmar_482._native_payloads import DECODERS
 from tekmar_482.trpc import method_spec
 
 from .gateway import Gateway
+from .mcp_server import MCP_BODY_LIMIT, MCP_PATH, McpAccess, diagnostics_server
 from .operations import catalog
 
 
@@ -58,18 +61,44 @@ def origin_allowed(origin: str | None, host: str) -> bool:
     return url.scheme in {"http", "https"} and url.netloc == host
 
 
-def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
+def create_app(
+    gateway: Gateway,
+    token: str | None = None,
+    *,
+    mcp_enabled: bool = True,
+    mcp_token: str | None = None,
+) -> FastAPI:
+    local_names = {socket.gethostname(), socket.getfqdn(), "localhost"}
+    mcp = diagnostics_server(gateway.feed) if mcp_enabled else None
+    mcp_http = (
+        mcp.streamable_http_app(
+            streamable_http_path=MCP_PATH,
+            stateless_http=True,
+            json_response=True,
+            max_request_body_size=MCP_BODY_LIMIT,
+            # McpAccess checks the actual destination address even on a wildcard bind.
+            transport_security=TransportSecuritySettings(
+                enable_dns_rebinding_protection=False
+            ),
+        )
+        if mcp is not None
+        else None
+    )
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        await gateway.compat.start()
-        gateway.start()
-        try:
-            yield
-        finally:
+        async with AsyncExitStack() as stack:
+            if mcp is not None:
+                await stack.enter_async_context(mcp.session_manager.run())
+            await gateway.compat.start()
             try:
-                await gateway.compat.stop()
+                gateway.start()
+                yield
             finally:
-                await gateway.stop()
+                try:
+                    await gateway.compat.stop()
+                finally:
+                    await gateway.stop()
 
     app = FastAPI(
         title="tekmarshark",
@@ -78,8 +107,15 @@ def create_app(gateway: Gateway, token: str | None = None) -> FastAPI:
         redoc_url=None,
     )
     assets = Path(__file__).parent / "static"
-    local_names = {socket.gethostname(), socket.getfqdn(), "localhost"}
     app.mount("/static", StaticFiles(directory=assets), name="static")
+    if mcp_http is not None:
+        app.router.routes.append(
+            Route(
+                MCP_PATH,
+                McpAccess(mcp_http, local_names, mcp_token),
+                methods=["GET", "POST", "DELETE"],
+            )
+        )
 
     @app.get("/")
     async def index() -> FileResponse:

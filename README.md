@@ -106,6 +106,43 @@ Scroll into history to hold your place while capture continues, or select
 Host wire bytes are reconstructed from accepted TPCK frames; they are
 not a byte-for-byte recording of malformed UART traffic.
 
+## Agent diagnostics
+
+Connect an MCP client using [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http) at
+`http://127.0.0.1:8482/mcp` (or the same LAN address and port you use for
+the dashboard). No second server or gateway connection is needed. The tools
+read cached observations; they cannot send frames, run discovery, change
+settings, or update firmware.
+
+| Tool | Use |
+| --- | --- |
+| `network_status` | Check gateway mode, connection, capture settings and retained trace coverage. |
+| `bus_timeline` | Compare per-port RX, TX outcomes, invalid frames and capture loss across a time window. |
+| `trace_search` | Filter and page through tN4, tRPC and diagnostic records by time, port, device, or message. |
+| `trace_frame` | Retrieve one record's decoded fields, endpoints and hex. Request the wire diagram separately for recent frames. |
+| `list_devices` / `device_state` | Inspect observed sources, cached readings, identities and reported configuration. |
+| `gateway_errors` | Read cached 64-bit firmware error totals, distinct from observed event counts. |
+
+Start with `network_status`. Use `bus_timeline` to locate a spike. To zoom into
+an older interval, narrow `minutes` and set `end_at`. Pass the bucket's
+`start_at` and `end_at` to `trace_search` and inspect individual sequence
+numbers with `trace_frame`. Search pages omit hex by default;
+`next_before_seq` goes backward and `next_after_seq` continues forward.
+Times are Unix seconds unless labeled `gateway_ms` (firmware uptime).
+
+The trace ring holds up to **30 minutes or 50,000 compact records**, whichever
+fills first. Minute summaries cover **six hours** independently of the trace
+ring. Both live only in memory and start empty after a service restart.
+Check the returned coverage and gap counts before interpreting silence.
+Capture loss and history eviction are reported separately.
+
+MCP is enabled by default. Use `--no-mcp` to disable the endpoint or
+`--mcp-key-file PATH` to require a separate diagnostics bearer key. Clients
+send that key via `Authorization: Bearer <key>`; it does not grant operator
+access. Use the direct dashboard address or the server's hostname. Host and
+Origin are checked, and no cross-origin browser access is enabled. Treat
+tool results as local telemetry and share them only with trusted clients.
+
 ## Controls and privacy
 
 Monitoring reads inventory and configuration; it does not set connected

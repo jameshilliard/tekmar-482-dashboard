@@ -22,6 +22,7 @@ from tekmar_482 import (
 from tekmar_482._native_payloads.layouts import BLOCK_SELECTORS
 from tekmar_482.units import degh_to_fahrenheit
 
+from .history import History
 from .wire_layout import Values
 
 Row = dict[str, Any]
@@ -50,6 +51,7 @@ def data(value: Any) -> Any:
 class Feed:
     def __init__(self, capacity: int = HISTORY) -> None:
         self.events: deque[Row] = deque(maxlen=capacity)
+        self.history = History()
         self.seq = 0
         self.changed = asyncio.Event()
         self.status: Row = {
@@ -87,6 +89,7 @@ class Feed:
             **detail,
         }
         self.events.append(event)
+        self.history.record(event)
         port = detail.get("port")
         if layer == "tn4" and isinstance(port, int) and 0 <= port < len(self.ports):
             entry = self.ports[port]
