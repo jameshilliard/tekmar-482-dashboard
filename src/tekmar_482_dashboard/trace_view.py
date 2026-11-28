@@ -159,12 +159,14 @@ def management_fields(message: TrpcPacket) -> list[tuple[int, str]] | None:
             ]
         if method == BridgeMethod.BUILD and body and body.isascii():
             return [(len(body), "Build")]
-    if method in {
-        BridgeMethod.MODE,
-        BridgeMethod.NORMAL_TRACE,
-        BridgeMethod.ACK_MASK,
-    } and service in {TrpcService.UPDATE, TrpcService.RESPONSE_UPDATE}:
-        return [(1, BridgeMethod(method).name.replace("_", " ").title())]
+    if service in {TrpcService.UPDATE, TrpcService.RESPONSE_UPDATE}:
+        if method == BridgeMethod.MODE and body in (b"\0\0", b"\x01\0", b"\x01\x01"):
+            return [
+                (1, "Mode: Raw" if body[0] else "Mode: Normal"),
+                (1, "Raw extensions: On" if body[1] else "Raw extensions: Off"),
+            ]
+        if method in {BridgeMethod.NORMAL_TRACE, BridgeMethod.ACK_MASK}:
+            return [(1, BridgeMethod(method).name.replace("_", " ").title())]
     if method == BridgeMethod.ERROR:
         return [(4, "Rejected method"), (1, "Reason")]
     return [] if not body else None

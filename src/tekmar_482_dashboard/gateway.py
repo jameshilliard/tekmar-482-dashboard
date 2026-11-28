@@ -111,7 +111,9 @@ class Gateway:
                     if self.mode == "raw":
                         stack.enter_context(
                             observe_bridge_packets(
-                                lambda p, tx: self._wire(p, tx, captures=False)
+                                lambda p, tx, literal: self._wire(
+                                    p, tx, literal_header=literal, captures=False
+                                )
                             )
                         )
                     app = await stack.enter_async_context(
@@ -375,6 +377,7 @@ class Gateway:
                     "Payload · " + kind,
                     [group("Record", prefix, column="record"), header, payload],
                 ),
+                literal_header=packet.type == TYPE_TN4,
             ),
             **meta,
         )
@@ -411,11 +414,22 @@ class Gateway:
             hex=record.bits.hex(),
             quality="error",
             reason=f"Invalid tN4 frame: {why}",
-            **diagram(packet, group("Payload · Invalid capture", parts)),
+            **diagram(
+                packet,
+                group("Payload · Invalid capture", parts),
+                literal_header=packet.type == TYPE_TN4,
+            ),
             **meta,
         )
 
-    def _trpc(self, packet: Packet, sample: TrpcPacket, tx: bool, **meta: Any) -> None:
+    def _trpc(
+        self,
+        packet: Packet,
+        sample: TrpcPacket,
+        tx: bool,
+        *,
+        literal_header: bool = False,
+    ) -> None:
         name, payload, quality, why, notice = trpc_view(packet, sample)
         peer = None
         if (
@@ -441,25 +455,41 @@ class Gateway:
             quality=quality,
             reason=why,
             notice=notice,
-            **diagram(packet, payload),
-            **meta,
+            **diagram(packet, payload, literal_header=literal_header),
         )
 
-    def _wire(self, packet: Packet, tx: bool, *, captures: bool = True) -> None:
+    def _wire(
+        self,
+        packet: Packet,
+        tx: bool,
+        *,
+        literal_header: bool = False,
+        captures: bool = True,
+    ) -> None:
         direction = "host_tx" if tx else "host_rx"
         try:
             if packet.type == TYPE_TRPC:
-                self._trpc(packet, TrpcPacket.from_packet(packet), tx)
+                self._trpc(
+                    packet,
+                    TrpcPacket.from_packet(packet),
+                    tx,
+                    literal_header=literal_header,
+                )
                 return
-            if packet.type == TYPE_TN4 and len(packet.data) >= 2:
+            if literal_header and packet.type == TYPE_TN4 and len(packet.data) >= 2:
                 raw, port = packet.data, packet.data[1]
-                if tx and raw[0] == 1:
+                if tx and raw[0] == 0:
+                    if raw[2:6] != bytes(4):
+                        raise ValueError("Raw Send must include a zero timestamp")
                     self._native(
                         packet,
-                        NativeFrame(port, 0, raw[2:]),
+                        NativeFrame(port, 0, raw[6:]),
                         direction,
                         observed=False,
-                        prefix=self._prefix("Send", port),
+                        prefix=[
+                            *self._prefix("Send", port),
+                            field(4, "TX timestamp: 0", "envelope"),
+                        ],
                     )
                     return
                 if not tx and raw[0] in (0, 4) and not captures:
@@ -489,7 +519,7 @@ class Gateway:
                 protocol="trpc" if packet.type == TYPE_TRPC else "gateway",
                 quality="error",
                 reason=str(err),
-                **opaque(packet),
+                **opaque(packet, literal_header=literal_header),
             )
             return
         self.feed.publish(
@@ -499,7 +529,7 @@ class Gateway:
             hex=packet.data.hex(),
             quality="partial",
             reason="Unrecognized TPCK packet type or service",
-            **opaque(packet),
+            **opaque(packet, literal_header=literal_header),
         )
 
     def _raw_result(self, packet: Packet, record: TxResult | PortError) -> None:
@@ -523,7 +553,7 @@ class Gateway:
             quality="partial" if type(why) is int else "good",
             reason="Unknown reason code" if type(why) is int else "Valid link result",
             notice=str(data(why)).replace("_", " ") if why is not None else None,
-            **diagram(packet, group("Payload · Raw", parts)),
+            **diagram(packet, group("Payload · Raw", parts), literal_header=True),
         )
 
     async def _normal_frames(self, trace: NormalTrace) -> None:
@@ -670,7 +700,9 @@ class Gateway:
                 "Capture paused for operation", connection="busy", operation=name
             )
             try:
-                with observe_bridge_packets(lambda p, tx: self._wire(p, tx)):
+                with observe_bridge_packets(
+                    lambda p, tx, literal: self._wire(p, tx, literal_header=literal)
+                ):
                     async with asyncio.timeout(300):
                         return await operations.execute(parsed)
             finally:

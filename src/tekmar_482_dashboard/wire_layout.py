@@ -62,8 +62,8 @@ def group(
     return node
 
 
-def diagram(packet: Packet, payload: Span) -> Diagram:
-    wire = serialize(packet)
+def diagram(packet: Packet, payload: Span, *, literal_header: bool = False) -> Diagram:
+    wire = serialize(packet, literal_header=literal_header)
     escapes: list[int] = []
     pos = 1  # SOF is a delimiter, not a stuffed data byte.
 
@@ -75,7 +75,7 @@ def diagram(packet: Packet, payload: Span) -> Diagram:
         for _ in range(leaf.pop("size")):
             if pos >= len(wire) - 1:
                 raise ValueError("annotated field extends beyond the TPCK frame")
-            if wire[pos] == ESC:
+            if (not literal_header or pos >= 3) and wire[pos] == ESC:
                 escapes.append(pos)
                 pos += 1
             pos += 1
@@ -97,9 +97,11 @@ def diagram(packet: Packet, payload: Span) -> Diagram:
     return {"wire_hex": wire.hex(), "layout": items, "escapes": escapes}
 
 
-def opaque(packet: Packet, label: str = "Undecoded bytes") -> Diagram:
+def opaque(
+    packet: Packet, label: str = "Undecoded bytes", *, literal_header: bool = False
+) -> Diagram:
     leaves = [span(packet.data, label, "unknown")] if packet.data else []
-    return diagram(packet, group("Payload", leaves))
+    return diagram(packet, group("Payload", leaves), literal_header=literal_header)
 
 
 def tcp_record(packet: Packet, payload: Span) -> Diagram:
